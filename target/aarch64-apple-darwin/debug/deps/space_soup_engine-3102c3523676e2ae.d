@@ -1,0 +1,19 @@
+/Users/frank/Desktop/rampstack/vr/space_soup_editor/target/aarch64-apple-darwin/debug/deps/space_soup_engine-3102c3523676e2ae.d: /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/lib.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/manifest.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/scene.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/animation.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/physics.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/events.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/script.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/rig.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/attach.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/locomotion.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/hands.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/runtime.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/debug_protocol.rs
+
+/Users/frank/Desktop/rampstack/vr/space_soup_editor/target/aarch64-apple-darwin/debug/deps/libspace_soup_engine-3102c3523676e2ae.rlib: /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/lib.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/manifest.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/scene.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/animation.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/physics.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/events.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/script.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/rig.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/attach.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/locomotion.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/hands.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/runtime.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/debug_protocol.rs
+
+/Users/frank/Desktop/rampstack/vr/space_soup_editor/target/aarch64-apple-darwin/debug/deps/libspace_soup_engine-3102c3523676e2ae.rmeta: /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/lib.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/manifest.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/scene.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/animation.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/physics.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/events.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/script.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/rig.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/attach.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/locomotion.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/hands.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/runtime.rs /Users/frank/Desktop/rampstack/vr/space_soup_engine/src/debug_protocol.rs
+
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/lib.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/manifest.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/scene.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/animation.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/physics.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/events.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/script.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/rig.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/attach.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/locomotion.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/hands.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/runtime.rs:
+/Users/frank/Desktop/rampstack/vr/space_soup_engine/src/debug_protocol.rs:

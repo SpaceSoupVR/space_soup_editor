@@ -1,0 +1,22 @@
+[package]
+name    = "space_soup_editor"
+version = "0.2.0"
+edition = "2021"
+
+[[bin]]
+name = "space_soup_editor"
+path = "src/main.rs"
+
+[dependencies]
+space_soup = { path = "../space_soup", features = ["canvas"] }
+space_soup_engine  = { path = "../space_soup_engine" }
+agate  = { path = "../agate" }
+
+winit      = "0.30"
+wgpu       = "25.0.0"
+pollster   = "0.3"
+bytemuck   = { version = "1.21.0", features = ["derive"] }
+glam       = { version = "0.29", features = ["serde"] }
+
+log        = "0.4"
+env_logger = "0.11"
