@@ -8,7 +8,7 @@ name = "space_soup_editor"
 path = "src/main.rs"
 
 [dependencies]
-space_soup = { path = "../space_soup", features = ["canvas"] }
+space_soup = { path = "../space_soup", features = ["canvas", "renderer", "voxelize"] }
 space_soup_engine  = { path = "../space_soup_engine" }
 agate  = { path = "../agate" }
 
@@ -20,3 +20,4 @@ glam       = { version = "0.29", features = ["serde"] }
 
 log        = "0.4"
 env_logger = "0.11"
+anyhow = "1.0.103"

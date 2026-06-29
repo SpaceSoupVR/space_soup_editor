@@ -14,15 +14,15 @@ pub fn spawn_listener(addr: &str) -> SharedPacket {
         let listener = match TcpListener::bind(&addr) {
             Ok(l) => l,
             Err(e) => {
-                log::error!("debug_viewer: could not bind {addr}: {e}");
+                log::error!("space_soup_editor: could not bind {addr}: {e}");
                 return;
             }
         };
-        log::info!("debug_viewer: listening on {addr}");
+        log::info!("space_soup_editor: listening on {addr}");
 
         for stream in listener.incoming() {
             let Ok(stream) = stream else { continue };
-            log::info!("debug_viewer: quest_app connected");
+            log::info!("space_soup_editor: quest_app connected");
 
             let mut reader = PacketReader::new(stream);
             loop {
@@ -31,7 +31,7 @@ pub fn spawn_listener(addr: &str) -> SharedPacket {
                         *shared_writer.lock().unwrap() = packet;
                     }
                     None => {
-                        log::info!("debug_viewer: quest_app disconnected");
+                        log::info!("space_soup_editor: quest_app disconnected");
                         break;
                     }
                 }

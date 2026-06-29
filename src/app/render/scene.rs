@@ -1,0 +1,92 @@
+use glam::{Quat, Vec3};
+
+use space_soup::renderer::{Camera, Color3, Cuboid, MeshInstance};
+use space_soup_engine::{DebugPacket, GameObject, RenderCuboid};
+
+use crate::scene_3d;
+use crate::transform_gizmo::{GizmoAssets, TransformGizmo};
+
+use super::super::ViewMode;
+
+pub(crate) const GIZMO_ANCHOR_MARGIN: f32 = 0.35;
+
+pub(crate) fn gizmo_anchor(obj: &GameObject) -> Vec3 {
+    let clearance = obj.cuboid.half_size.y + GIZMO_ANCHOR_MARGIN;
+    obj.cuboid.position + Vec3::new(0.0, clearance, 0.0)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn build_cuboids(
+    render_cuboids: &[RenderCuboid],
+    packet: &DebugPacket,
+    head_pos: Vec3,
+    head_rot: Quat,
+    to_world: impl Fn(Vec3, Quat) -> (Vec3, Quat),
+    objects: &[GameObject],
+    selected_id: Option<&str>,
+    is_edit: bool,
+    dragging_new_model: bool,
+    ghost_preview: Option<Vec3>,
+) -> Vec<Cuboid> {
+    let mut cuboids: Vec<Cuboid> = render_cuboids.iter().map(scene_3d::engine_cuboid_to_render).collect();
+    cuboids.extend(scene_3d::ground_grid());
+    cuboids.extend(scene_3d::build_player_overlay(
+        head_pos, head_rot, &packet.left_hand, &packet.right_hand, to_world,
+    ));
+
+    if is_edit {
+        for obj in objects {
+            if obj.hidden { continue; }
+            let selected = selected_id == Some(obj.id.as_str());
+            let wire = if selected { Color3(255, 220, 40, 255) } else { Color3(255, 255, 255, 150) };
+            if obj.mesh.is_some() {
+                let mut c = Cuboid::wireframe(obj.cuboid.position, obj.cuboid.half_size, wire);
+                c.rotation = obj.cuboid.rotation;
+                cuboids.push(c);
+            } else if selected {
+                let mut c = Cuboid::wireframe(obj.cuboid.position, obj.cuboid.half_size, wire);
+                c.rotation = obj.cuboid.rotation;
+                cuboids.push(c);
+            }
+        }
+    }
+
+    if dragging_new_model {
+        if let Some(pos) = ghost_preview {
+            let half = Vec3::splat(0.25);
+            cuboids.push(Cuboid::wireframe(
+                Vec3::new(pos.x, half.y, pos.z), half,
+                Color3(80, 220, 255, 160),
+            ));
+        }
+    }
+    cuboids
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn sync_gizmo_and_collect<'a>(
+    xform_gizmo: &mut TransformGizmo,
+    gizmo_assets: &'a mut Option<GizmoAssets>,
+    camera: &Camera,
+    viewport: (f32, f32),
+    objects: &[GameObject],
+    selected_id: Option<&str>,
+    view_mode: ViewMode,
+    show_editor: bool,
+    is_dragging: bool,
+) -> Vec<MeshInstance<'a>> {
+    if view_mode != ViewMode::Edit || show_editor {
+        return Vec::new();
+    }
+    let Some(id) = selected_id else { return Vec::new() };
+    let Some(obj) = objects.iter().find(|o| o.id == id) else { return Vec::new() };
+
+    xform_gizmo.set_position(gizmo_anchor(obj));
+    if !is_dragging {
+        xform_gizmo.set_rotation(obj.cuboid.rotation);
+        xform_gizmo.set_scale(obj.cuboid.half_size);
+    }
+
+    let Some(assets) = gizmo_assets.as_mut() else { return Vec::new() };
+    xform_gizmo.collect_mesh_instances(assets, camera, viewport)
+}

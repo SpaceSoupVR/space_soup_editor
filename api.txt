@@ -1,0 +1,1225 @@
+API.TXT — space_soup_editor v0.2.0
+====================================
+A desktop scene editor for the space_soup VR/XR engine.
+Connects to a Quest headset over TCP, renders a 3D edit viewport
+via wgpu, and provides inspector/script/scene-file editing tools.
+
+Binary: space_soup_editor  (src/main.rs)
+
+Dependencies
+------------
+space_soup        (local) — renderer, cuboids, GltfMesh, voxelizer, UI overlay
+space_soup_engine (local) — GameRuntime, Scene, GameObject, DebugPacket, HandSample
+agate             (local) — immediate-mode UI (Ui, TextEditor, Theme, WidgetId)
+winit   0.30      — window + event loop
+wgpu    25.0      — GPU device, surface, command encoding
+pollster 0.3      — block_on for async wgpu init
+bytemuck 1.21     — safe transmute / Pod derives
+glam    0.29      — Vec2 / Vec3 / Quat / Mat4 math
+log + env_logger  — structured logging
+anyhow  1.0       — error propagation
+
+
+================================================================
+FILE INDEX
+================================================================
+
+src/main.rs
+src/network.rs
+src/scene_3d.rs
+src/text_panels.rs
+src/transform_gizmo/mod.rs
+src/transform_gizmo/geometry.rs
+src/transform_gizmo/glb.rs
+src/transform_gizmo/assets.rs
+src/transform_gizmo/colors.rs
+src/transform_gizmo/math.rs
+src/transform_gizmo/picking.rs
+src/transform_gizmo/drag.rs
+src/transform_gizmo/render.rs
+src/app/mod.rs
+src/app/setup.rs
+src/app/layout.rs
+src/app/nav.rs
+src/app/scene_bridge.rs
+src/app/edit_camera.rs
+src/app/discover.rs
+src/app/picking.rs
+src/app/render/mod.rs
+src/app/render/scene.rs
+src/app/render/navigator.rs
+src/app/render/inspector.rs
+src/app/render/toolbar.rs
+src/app/render/statusbar.rs
+src/app/render/viewport_overlay.rs
+src/app/input/mod.rs
+src/app/input/mouse.rs
+src/app/input/keyboard.rs
+src/app/input/gesture.rs
+src/app/input/resize.rs
+
+
+================================================================
+FILE DETAILS
+================================================================
+
+------------------------------------------------------------------------
+src/main.rs
+------------------------------------------------------------------------
+PURPOSE
+  Entry point. Wires the winit event loop to App via ApplicationHandler.
+  Spawns the network listener and hands the shared packet into App.
+
+CONSTANTS
+  OBJECT_HALF_SIZE: f32 = 0.2
+    Default half-extent (meters) for a newly-dropped model before the
+    user resizes it in the Inspector. Also the placeholder cube size
+    shown while a drag is in progress.
+
+TRAIT IMPL
+  impl ApplicationHandler for App
+    fn resumed(event_loop)         — calls App::resumed_setup
+    fn window_event(event_loop, id, event)
+                                   — delegates to app::input::handle_window_event
+    fn about_to_wait(_)            — calls App::redraw_now (drives the render loop)
+
+fn main()
+  1. Initialises env_logger.
+  2. Calls network::spawn_listener("0.0.0.0:7778") → SharedPacket.
+  3. Creates EventLoop and App::new(packet).
+  4. Runs event_loop.run_app(&mut app).
+
+
+------------------------------------------------------------------------
+src/network.rs
+------------------------------------------------------------------------
+PURPOSE
+  Background TCP server. Accepts one connection at a time from the
+  Quest headset, reads length-prefixed DebugPackets, and stores the
+  latest packet in a shared Arc<Mutex<DebugPacket>>.
+
+TYPE ALIAS
+  SharedPacket = Arc<Mutex<DebugPacket>>
+
+pub fn spawn_listener(addr: &str) -> SharedPacket
+  Binds a TcpListener on `addr`, spawns a background thread, and
+  returns the shared handle.
+
+  Thread behaviour:
+    - Loops on listener.incoming().
+    - For each stream, creates a PacketReader (space_soup_engine).
+    - Calls reader.read_packet() in a loop; on Some(packet) writes
+      into the mutex; on None (disconnect) breaks and waits for
+      the next connection.
+    - Logs connect / disconnect / bind-error events via log::info /
+      log::error.
+
+
+------------------------------------------------------------------------
+src/scene_3d.rs
+------------------------------------------------------------------------
+PURPOSE
+  Pure geometry helpers: converts engine render lists into Cuboid
+  primitives and builds decorative overlays (ground grid, player
+  avatar, hand joints / aim ray).
+
+pub fn engine_cuboid_to_render(rc: &RenderCuboid) -> Cuboid
+  Maps a space_soup_engine::RenderCuboid (Solid / Wireframe /
+  SolidAndWire style) to a space_soup::renderer::Cuboid, preserving
+  position, half_size, color, wire_color, and rotation.
+
+pub fn build_player_overlay(
+    world_head_pos: Vec3,
+    world_head_rot: Quat,
+    left_hand:  &HandSample,
+    right_hand: &HandSample,
+    hand_transform: impl Fn(Vec3, Quat) -> (Vec3, Quat),
+) -> Vec<Cuboid>
+  Builds a set of Cuboids visualising the remote player:
+    - Head: yellow solid+wire box (0.08 × 0.08 × 0.10 m).
+    - Nose: small red cube 0.12 m in front of head.
+    - Left hand  (Color3 180,200,255) via push_hand.
+    - Right hand (Color3 255,200,180) via push_hand.
+
+fn push_hand(cuboids, hand, color, transform)  [private]
+  If hand tracking is active and joints present:
+    Emits one Cuboid per valid joint, sized by joint name:
+      "tip"              → 0.010 m cube
+      "palm" / "wrist"   → 0.035 × 0.018 × 0.045 m box
+      other              → 0.013 m cube
+  Else if grip pose available:
+    Emits a solid+wire box (0.035 × 0.035 × 0.06 m).
+  If aim pose available:
+    Emits a wireframe cube at aim origin + 5 small solid dots
+    spaced 0.06 m along aim direction (a dotted aim ray).
+
+pub fn ground_grid() -> Vec<Cuboid>
+  Builds a ±3 m grid of thin boxes on the XZ plane at Y=0, spaced
+  0.5 m apart, in dark blue-grey (Color3 70,70,85).
+
+
+------------------------------------------------------------------------
+src/text_panels.rs
+------------------------------------------------------------------------
+PURPOSE
+  Formats live DebugPacket telemetry into human-readable strings for
+  the two debug text panels.
+
+pub fn left_panel_text(p: &DebugPacket) -> String
+  Sections: HEAD (position + quaternion), LEFT HAND (tracking state,
+  grip/aim poses, buttons, trigger/squeeze/stick),
+  LEFT HAND JOINTS (per-joint XYZ when tracking active).
+
+pub fn right_panel_text(p: &DebugPacket) -> String
+  Sections: RIGHT HAND, LOCOMOTION (mode, player_offset, yaw,
+  teleport_aiming), REMOTE SCENE (scene_name, object/cuboid/mesh
+  counts, active animations), TIMING (dt, fps, frame_count),
+  LOG (last 10 lines in reverse order).
+
+fn push_pose(s, label, pos: Vec3)   [private]
+  Appends "label:  (x, y, z)\n" formatted to 3 decimal places.
+
+fn push_quat(s, label, rot: Quat)   [private]
+  Appends "label:  (x, y, z, w)\n" formatted to 3 decimal places.
+
+fn push_hand(s, hand: &HandSample)  [private]
+  Appends tracking, grip, aim, trigger, squeeze, stick, buttons.
+
+fn push_joints(s, hand: &HandSample) [private]
+  Appends a line per valid joint: name (14-char padded) + XYZ.
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/mod.rs
+------------------------------------------------------------------------
+PURPOSE
+  Unity-style 3D transform gizmo. Exposes Translate (arrows + plane
+  handles), Rotate (rings), and Scale (cube-tip arrows) modes.
+  Geometry is procedural; each part is written to a temp GLB and
+  loaded back via GltfMesh::load (the only public triangle API).
+
+ENUMS (pub(crate))
+  GizmoMode  { Translate, Rotate, Scale }
+  GizmoSpace { Local, World }
+  Axis       { X, Y, Z, XY, XZ, YZ, XYZ }
+
+ENUM (private)
+  DragState
+    Translate { anchor_offset: Vec3 }
+    Rotate    { axis, start_rot, start_angle, plane_u, plane_v }
+    Scale     { axis, start_scale: Vec3, start_mouse: Vec2 }
+
+STRUCT pub(crate) TransformGizmo
+  Fields (pub):
+    mode:          GizmoMode
+    space:         GizmoSpace
+    selected_axis: Option<Axis>
+    hovered_axis:  Option<Axis>
+  Fields (private):
+    position, rotation: Quat, scale: Vec3
+    drag: Option<DragState>
+    current_angle_deg: Option<f32>
+
+  impl TransformGizmo
+    pub fn new() -> Self
+      Defaults: Translate mode, World space, position ZERO,
+      rotation IDENTITY, scale ONE, no drag.
+
+    Transform accessors
+      pub fn set_position(p: Vec3)
+      pub fn set_rotation(r: Quat)
+      pub fn set_scale(s: Vec3)
+      pub fn get_position() -> Vec3
+      pub fn get_rotation() -> Quat
+      pub fn get_scale() -> Vec3
+      pub fn current_drag_angle_degrees() -> Option<f32>
+        Returns accumulated rotation (degrees) during an active
+        rotate drag, for potential on-screen readout display.
+
+    Mutation helpers (allow(dead_code))
+      pub fn rotate(axis: Axis, angle: f32)
+        Applies an incremental rotation around the given axis.
+      pub fn scale_axis(axis: Axis, amount: f32)
+        Multiplies the scale component for the given axis.
+
+    Space helpers (private)
+      fn basis() -> Quat
+        IDENTITY in World space; self.rotation in Local space.
+      fn axis_dir(axis: Axis) -> Vec3
+        Returns the world-space unit vector for X/Y/Z axes,
+        rotated by basis(). Returns ZERO for compound axes.
+      fn state_for(axis: Axis) -> ColorState
+        Selected > Hover > Normal for a given axis.
+
+  impl Default — delegates to Self::new()
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/geometry.rs
+------------------------------------------------------------------------
+PURPOSE
+  Procedural mesh generation for all gizmo parts.
+  All functions return Geo = (Vec<[f32;3]>, Vec<[f32;3]>, Vec<u16>)
+                             (positions,    normals,       indices).
+
+TYPE ALIAS
+  pub(crate) Geo = (Vec<[f32;3]>, Vec<[f32;3]>, Vec<u16>)
+
+Combinators
+  pub(crate) fn merge(a: Geo, b: Geo) -> Geo
+    Concatenates two meshes, offsetting b's indices by len(a.positions).
+  pub(crate) fn translate_geo(g: Geo, t: [f32;3]) -> Geo
+    Shifts all positions by t; normals unchanged.
+  pub(crate) fn apply_rot(g: Geo, f: fn([f32;3]) -> [f32;3]) -> Geo
+    Applies a rotation function to both positions and normals.
+
+Primitive generators (private)
+  fn cylinder(radius, height, segments) -> Geo
+    Open-sided cylinder along +Z with per-vertex lateral normals.
+  fn cone(radius, height, base_z, segments) -> Geo
+    Cone apex at base_z+height, with lateral faces and a closed
+    bottom cap (normal [0,0,-1]).
+  fn torus(major_r, minor_r, major_seg, minor_seg) -> Geo
+    Full torus in the XY plane.
+  fn cube(half, center: [f32;3]) -> Geo
+    Axis-aligned box with per-face flat normals (6 quads → 12 tris).
+  fn quad_double_sided_rect(w, h) -> Geo
+    Two-sided flat quad in the XY plane.
+  fn quad_double_sided(size) -> Geo
+    Square version of quad_double_sided_rect.
+  fn square_frame(outer, thickness) -> Geo
+    Four quads forming a hollow square frame in XY plane.
+
+Named part builders (private)
+  fn arrow_geo()         cylinder(r=0.018, h=0.6) + cone(r=0.05, h=0.16)
+  fn scale_arrow_geo()   cylinder(r=0.018, h=0.42) + cube(half=0.07)
+  fn ring_geo()          torus(major=0.85, minor=0.014, 48×8)
+  fn outer_ring_geo()    torus(major=1.05, minor=0.012, 48×6)
+  fn plane_geo()         quad_double_sided(0.16) translated to [0.24,0.24,0]
+  fn uniform_scale_geo() cube(half=0.06) at origin
+  fn uniform_translate_geo() square_frame(outer=0.14, thickness=0.012)
+
+pub(crate) fn geometry_for(mode: GizmoMode, axis: Axis) -> Option<Geo>
+  Maps (mode, axis) → the correct Geo, applying rot_y90 / rot_x_neg90
+  to orient each part along its axis. Returns None for unmapped combos
+  (e.g. Scale XY/XZ/YZ which don't exist).
+
+pub(crate) fn all_axes_for(mode: GizmoMode) -> &'static [Axis]
+  Translate → [X,Y,Z,XY,XZ,YZ,XYZ]
+  Rotate    → [X,Y,Z,XYZ]
+  Scale     → [X,Y,Z,XYZ]
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/glb.rs
+------------------------------------------------------------------------
+PURPOSE
+  Encodes a single Geo mesh + flat color as a minimal valid GLB 2.0
+  binary blob (POSITION + NORMAL + indices, one PBR material).
+
+fn srgb_to_linear(c: u8) -> f32  [private]
+  Converts sRGB byte (0-255) to linear float using the standard
+  IEC 61966-2-1 piecewise formula.
+
+pub(crate) fn write_glb(geo: &Geo, color: Color3) -> Vec<u8>
+  Layout of output bytes:
+    12-byte GLB header (magic "glTF", version 2, total length)
+    JSON chunk  (type 0x4E4F534A)  — full glTF scene descriptor:
+      buffers, bufferViews (pos/norm/idx), accessors, one material
+      with baseColorFactor from srgb_to_linear(color), one mesh
+      primitive (mode=4 triangles), one node, one scene.
+    BIN  chunk  (type 0x004E4942)  — packed float32 positions,
+      float32 normals, uint16 indices; each section 4-byte padded.
+  All fields are little-endian. JSON is space-padded to 4-byte boundary.
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/assets.rs
+------------------------------------------------------------------------
+PURPOSE
+  Loads (or re-generates) all gizmo GLB variants from a temp-dir
+  cache and stores them as (GltfMesh, ModelUniform) pairs keyed by
+  (GizmoMode, Axis, ColorState).
+
+pub(crate) struct GizmoAssets
+  pub(crate) parts: HashMap<(GizmoMode, Axis, ColorState), (GltfMesh, ModelUniform)>
+
+  pub fn load(renderer: &Renderer) -> Self
+    Cache dir: std::env::temp_dir() / "space_soup_gizmo_cache".
+    For every (mode, axis) from all_axes_for, for every ColorState:
+      1. Generates Geo via geometry_for.
+      2. Picks color via color_for(axis, state).
+      3. Encodes GLB via write_glb.
+      4. Writes to "<cache_dir>/<Mode>_<Axis>_<State>.glb".
+      5. Loads back via GltfMesh::load + renderer.create_model_uniform.
+      6. Inserts into parts map.
+    Logs total loaded/attempted count.
+    Missing geometry combos (geometry_for returns None) are skipped
+    silently; load failures are warned via log::warn.
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/colors.rs
+------------------------------------------------------------------------
+PURPOSE
+  Canonical color table for gizmo axes and interaction states.
+
+pub(crate) enum ColorState { Normal, Hover, Selected }
+
+pub(crate) fn axis_base_color(axis: Axis) -> Color3
+  X   → (225, 40,  40,  255)  red
+  Y   → (80,  220, 60,  255)  green
+  Z   → (50,  120, 230, 255)  blue
+  XY  → (50,  120, 230, 160)  blue  semi-transparent (omitted-axis tint)
+  XZ  → (80,  220, 60,  160)  green semi-transparent
+  YZ  → (225, 40,  40,  160)  red   semi-transparent
+  XYZ → (245, 245, 245, 235)  near-white
+
+pub(crate) fn color_for(axis: Axis, state: ColorState) -> Color3
+  Hover / Selected → (255, 220, 40, 255)  yellow
+  Normal           → axis_base_color(axis)
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/math.rs
+------------------------------------------------------------------------
+PURPOSE
+  Pure 3D math helpers with no GPU dependency. Used by picking,
+  drag, and render sub-modules.
+
+pub(crate) fn normalize3(p: [f32;3]) -> [f32;3]
+  Normalises a raw float triple; clamps denominator to 1e-8.
+
+pub(crate) fn rot_y90(p: [f32;3]) -> [f32;3]
+  R_y(+90°): maps +Z → +X. Used to orient Z-aligned geometry along X.
+
+pub(crate) fn rot_x_neg90(p: [f32;3]) -> [f32;3]
+  R_x(-90°): maps +Z → +Y. Used to orient Z-aligned geometry along Y.
+
+pub(crate) fn screen_ray(camera, viewport, mouse: Vec2) -> (Vec3, Vec3)
+  Unprojects a pixel coordinate to a world-space ray (origin, dir)
+  using the inverse of camera.projection() * camera.view().
+  Near plane → far plane unprojection with perspective divide.
+
+pub(crate) fn project_to_screen(camera, viewport, world: Vec3) -> Option<Vec2>
+  Projects a world point to pixel coordinates. Returns None if the
+  point is behind the camera (clip.w <= 0.0001).
+
+pub(crate) fn ray_plane_intersect(origin, dir, plane_point, normal) -> Option<Vec3>
+  Möller–Trumbore plane intersection. Returns None if ray is parallel
+  (|denom| < 1e-6) or intersection is behind the ray origin (t < 0).
+
+pub(crate) fn closest_point_on_line_to_ray(
+    line_point, line_dir, ray_origin, ray_dir) -> Option<Vec3>
+  Finds the point on the infinite axis line closest to the view ray.
+  Used to convert 2D drag into 1D motion along a 3D axis.
+  Falls back to a camera-facing plane when the axis points straight
+  at the camera (denom < 1e-6).
+
+pub(crate) fn perpendicular_basis(n: Vec3) -> (Vec3, Vec3)
+  Returns two unit vectors (u, v) perpendicular to n and to each
+  other, forming a right-handed frame. Used for rotate-ring dragging.
+
+pub(crate) fn dist_point_segment(p: Vec2, a: Vec2, b: Vec2) -> f32
+  2D point-to-segment distance; clamps parameter t to [0,1].
+
+pub(crate) fn point_in_quad(p: Vec2, q: &[Vec2]) -> bool
+  Winding-number test for a point inside a convex screen-space quad.
+  Uses cross-product sign consistency across all four edges.
+
+pub(crate) fn billboard_rotation(from: Vec3, to: Vec3) -> Quat
+  Quaternion that rotates +Z to point from `from` toward `to`.
+  Used for the XYZ uniform-handle (always faces the camera).
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/picking.rs
+------------------------------------------------------------------------
+PURPOSE
+  Mouse-over hit-testing for all gizmo handles and rings.
+
+impl TransformGizmo
+  pub fn raycast_gizmo(mouse: Vec2, camera, viewport) -> Option<Axis>
+    Returns the closest Axis within PICK_THRESHOLD_PX (12 px) of the
+    mouse, or None.
+
+    Translate mode:
+      Axes X/Y/Z  — segment distance from origin to tip (0.8 * scale).
+      Planes XY/XZ/YZ — plane_pick_distance.
+      XYZ (uniform) — direct screen distance to origin.
+
+    Scale mode:
+      Axes X/Y/Z — segment distance (0.5 * scale tip length).
+      XYZ — screen distance to origin.
+
+    Rotate mode:
+      Rings X/Y/Z — ring_pick_distance (32-segment polyline on torus).
+
+  fn plane_corners(axis, scale) -> [Vec3; 4]  [private]
+    Computes the four world-space corners of a plane handle quad
+    (offset 0.24 * scale from origin, half-extent 0.08 * scale).
+
+  fn plane_pick_distance(axis, scale, mouse, camera, viewport) -> Option<f32>  [private]
+    Projects all four corners to screen; returns 0.0 if mouse is
+    inside the quad (point_in_quad), else minimum edge distance.
+
+  fn ring_pick_distance(axis, scale, mouse, camera, viewport) -> Option<f32>  [private]
+    Samples the rotation ring as 32 screen-space segments
+    (radius 0.85 * scale) and returns the minimum segment distance.
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/drag.rs
+------------------------------------------------------------------------
+PURPOSE
+  Implements begin_drag / drag / end_drag for all three gizmo modes.
+
+impl TransformGizmo
+  pub fn begin_drag(axis, mouse, camera, viewport)
+    Stores a DragState appropriate to the current mode:
+      Translate → anchor_offset = hit_point - gizmo_position
+      Rotate    → records axis direction, perpendicular basis (u,v),
+                  and initial angle via angle_on_plane.
+      Scale     → records start_scale and start_mouse.
+
+  pub fn drag(mouse, camera, viewport)
+    Updates gizmo state from current mouse position:
+      Translate → recomputes hit, sets position = hit - anchor_offset.
+      Rotate    → computes delta angle, applies
+                  Quat::from_axis_angle(axis_dir, delta) * start_rot.
+                  Updates current_angle_deg.
+      Scale     → factor = (1 - delta_px * 0.005).max(0.01) where
+                  delta_px = mouse.y - start_mouse.y (drag up = grow).
+                  Applies factor to the relevant scale component(s).
+
+  pub fn end_drag()
+    Clears drag, selected_axis, current_angle_deg.
+
+  fn angle_on_plane(mouse, camera, viewport, u, v) -> f32  [private]
+    Casts a ray, finds plane intersection, returns atan2(rel·v, rel·u).
+
+  fn translate_drag_point(axis, mouse, camera, viewport) -> Option<Vec3>  [private]
+    Single axis  → closest_point_on_line_to_ray.
+    Plane handle → ray_plane_intersect on the handle's normal.
+    XYZ          → ray_plane_intersect on camera-facing plane.
+
+
+------------------------------------------------------------------------
+src/transform_gizmo/render.rs
+------------------------------------------------------------------------
+PURPOSE
+  Computes per-frame scale and collects MeshInstance slices for the
+  renderer, mutating GltfMesh transforms in GizmoAssets.
+
+impl TransformGizmo
+  pub(crate) fn screen_scale(camera, viewport) -> f32
+    Constant-screen-size scaling: solves for the world-space size
+    that produces TARGET_PIXELS (90 px) of screen height, using
+    inv_tan_half_fov from camera.projection().y_axis.y and camera
+    distance. Clamped to [MIN_WORLD_SCALE=0.5, MAX_WORLD_SCALE=3.0].
+
+  pub fn collect_mesh_instances<'a>(
+      assets: &'a mut GizmoAssets,
+      camera, viewport
+  ) -> Vec<MeshInstance<'a>>
+    Pass 1 — mutates GltfMesh transforms (position / scale / rotation)
+      for every axis in all_axes_for(mode):
+        position = self.position
+        scale    = Vec3::splat(screen_scale)
+        rotation = billboard_rotation   (XYZ handle, non-Scale modes)
+                 | basis()              (all other parts)
+    Pass 2 — collects shared MeshInstance refs for the renderer.
+    Two-pass design avoids aliasing: no shared references during
+    the mutation pass.
+
+
+------------------------------------------------------------------------
+src/app/mod.rs
+------------------------------------------------------------------------
+PURPOSE
+  Central App struct — owns all editor state. Declares all sub-modules.
+
+SUB-MODULES (pub(crate))
+  discover, edit_camera, input, layout, nav, picking, render,
+  scene_bridge, setup
+
+ENUMS (pub(crate))
+  ViewMode     { PlayerView, FirstPerson, Edit }
+  GizmoPart    { Orbit, Pan, Zoom }
+  EditTarget   { SceneFile, ObjectScript(String) }
+  DragAxis     { X, Y, Z }
+  DragProp     { Position, Size }
+
+STRUCT pub(crate) FieldDrag
+  prop: DragProp, axis: DragAxis
+
+STRUCT pub(crate) App
+  Window / GPU
+    window:   Option<Arc<Window>>
+    instance: wgpu::Instance
+    surface:  Option<Surface<'static>>
+    config:   Option<SurfaceConfiguration>
+    renderer: Option<Renderer>
+    overlay:  Option<Overlay>
+    camera:   Camera
+    ui:       Option<Ui>
+
+  Input state
+    mouse_pos, mouse_pressed, mouse_released, mouse_held,
+    scroll_y, text_input, named_keys, mods: ModifiersState
+
+  Runtime
+    packet:    SharedPacket
+    runtime:   GameRuntime
+    last_tick: Instant
+    start:     Instant
+    scale:     f32   (HiDPI scale factor)
+
+  Mesh cache
+    mesh_cache:         HashMap<String, (GltfMesh, ModelUniform)>
+    mesh_base_half_size: HashMap<String, Vec3>
+
+  View / camera
+    view_mode:      ViewMode
+    edit_camera:    EditCamera
+    last_world_head: Vec3
+
+  Selection / interaction
+    selected_object:     Option<String>
+    moving_object:       bool
+    move_anchor_offset:  Vec3
+    last_click_time:     Option<Instant>
+    last_clicked_object: Option<String>
+    dragging_new_model:  Option<PathBuf>
+    ghost_preview:       Option<Vec3>
+    dragging_field:      Option<FieldDrag>
+    gizmo_drag:          Option<GizmoPart>
+    press_in_chrome:     bool
+    last_mouse_pos:      (f32, f32)
+    left_down:           bool
+    dragged:             bool
+
+  Scene
+    scene_dirty: bool
+
+  Transform gizmo
+    xform_gizmo:    TransformGizmo
+    gizmo_assets:   Option<GizmoAssets>
+    gizmo_dragging: bool
+
+  Text editor
+    editor:         TextEditor
+    editing:        Option<EditTarget>
+    editor_focused: bool
+    editor_drag:    bool
+
+  Navigator
+    files:            Vec<PathBuf>
+    selected_file:    Option<usize>
+    nav_scenes_open:  bool
+    nav_objects_open: bool
+    files_discovered: Vec<PathBuf>
+    available_models: Vec<PathBuf>
+
+  impl App
+    pub(crate) fn new(packet: SharedPacket) -> Self
+      Loads GameRuntime from "../game", discovers scene JSONs and
+      model GLBs, initialises all fields to defaults.
+
+    pub(crate) fn win_size() -> (f32, f32)
+      Returns physical window dimensions; (0,0) if window absent.
+
+    pub(crate) fn redraw_now()
+      Calls window.request_redraw().
+
+
+------------------------------------------------------------------------
+src/app/setup.rs
+------------------------------------------------------------------------
+PURPOSE
+  One-time GPU/window setup called from ApplicationHandler::resumed.
+
+impl App
+  pub(crate) fn resumed_setup(event_loop: &ActiveEventLoop)
+    1. Creates winit Window (1600×900 logical, title "space_soup_editor").
+    2. Creates wgpu Surface (static lifetime via mem::transmute).
+    3. Requests HighPerformance adapter + default limits device/queue.
+    4. Configures surface with Fifo present mode.
+    5. Builds Camera, Renderer, Overlay, Ui (loads font.ttf from CWD).
+    6. Pre-loads all mesh GLBs referenced by the current scene into
+       mesh_cache, computing mesh_base_half_size for each.
+    7. Calls GizmoAssets::load(renderer).
+    8. Stores renderer, overlay, surface, config, ui into App.
+
+
+------------------------------------------------------------------------
+src/app/layout.rs
+------------------------------------------------------------------------
+PURPOSE
+  Computes all UI panel rectangles from window dimensions.
+  No drawing happens here — pure geometry.
+
+TYPE ALIAS
+  pub(crate) Rect = [f32; 4]   ([x, y, w, h])
+
+CONSTANTS (pub(crate))
+  TOOLBAR_H   = 52.0    STATUSBAR_H = 28.0
+  NAVIGATOR_W = 248.0   INSPECTOR_W = 300.0
+  TAB_BAR_H   = 28.0    ROW_H = 30.0
+  PAD = 12.0            PANEL_GAP = 12.0
+
+pub(crate) fn rect_from(x, y, w, h) -> Rect
+pub(crate) fn in_rect(p: (f32,f32), r: Rect) -> bool
+
+pub(crate) struct Layout
+  toolbar, navigator, inspector, statusbar,
+  center, editor_tab, editor_body,
+  seg: [Rect; 3]        (view-mode segmented control, 3 buttons)
+  btn_editor,           (text-editor toggle button)
+  btn_save,             (file-editor Save button)
+  btn_save_scene        (scene Save Scene button)
+
+  pub fn new(win_w, win_h, theme) -> Self
+    Derives all rects from window size and theme pixel scale.
+
+  pub fn nav_row(theme, i) -> Rect
+    Row rect for the i-th navigator list item.
+
+  pub fn model_tray(theme) -> Rect
+    Bottom strip across the viewport for the model drag-tray.
+
+  pub fn model_rects(theme, count) -> Vec<Rect>
+    Evenly-spaced model chip rects within model_tray.
+
+  pub fn gizmo_rects(theme) -> [Rect; 3]
+    Three stacked icon buttons (Orbit / Pan / Zoom) at the right
+    edge of the viewport.
+
+  pub fn mode_button_rects(theme) -> [Rect; 3]
+    Move / Rotate / Scale mode buttons at top-left of viewport.
+
+  pub fn inspector_cards(theme, top_y) -> InspectorCards
+    Computes all sub-rects inside the inspector panel.
+
+pub(crate) struct InspectorCards
+  name_row: Rect
+  pos_card:  Rect,  pos_rows:  [Rect; 3]
+  sz_card:   Rect,  sz_rows:   [Rect; 3]
+  rot_card:  Rect,  rot_rows:  [Rect; 3]
+  col_card:  Rect,  col_row:   Rect
+  btn_voxelize: Rect
+  btn_script:   Rect
+  btn_dup:      Rect,  btn_del: Rect
+  bottom_y:     f32
+
+
+------------------------------------------------------------------------
+src/app/nav.rs
+------------------------------------------------------------------------
+PURPOSE
+  Builds the ordered row list for the navigator panel.
+
+ENUM pub(crate) NavRow
+  GroupHeader { group: NavGroup }
+  SceneFile   { file_index: usize }
+  Object      { object_id: String }
+  EmptyHint   { group: NavGroup }
+
+ENUM pub(crate) NavGroup { Scenes, Objects }
+
+impl App
+  pub(crate) fn nav_rows() -> Vec<NavRow>
+    Emits: Scenes header, then (if open) SceneFile rows or EmptyHint;
+    Objects header, then (if open) Object rows or EmptyHint.
+
+  pub(crate) fn open_file(idx: usize)
+    Loads files_discovered[idx] into self.editor via TextEditor::load,
+    sets editing = Some(EditTarget::SceneFile), editor_focused = true.
+
+
+------------------------------------------------------------------------
+src/app/scene_bridge.rs
+------------------------------------------------------------------------
+PURPOSE
+  Bridges engine types (GameObject, Scene) to editor operations
+  (create, ID generation, save, script access, voxelization).
+
+pub(crate) fn new_object(
+    id: String, pos: Vec3, half: Vec3, mesh_path: Option<String>
+) -> GameObject
+  Constructs a default GameObject. Style is Wireframe if mesh_path
+  is Some, Solid otherwise.
+
+pub(crate) fn unique_id(scene: &Scene, base: &str) -> String
+  Returns base if not taken; otherwise base_2, base_3, …
+
+pub(crate) fn read_transform(obj: &GameObject) -> (Vec3, Vec3, Quat, Color3)
+  Extracts (position, half_size, rotation, color) from obj.cuboid.
+
+pub(crate) fn save_scene(scene, game_dir, scene_name) -> anyhow::Result<PathBuf>
+  Writes scene JSON to "<game_dir>/scenes/<scene_name>.json".
+
+pub(crate) fn object_script(scene, id) -> String
+  Returns the script text for `id`, or empty string.
+
+pub(crate) fn set_object_script(scene, id, text: String)
+  Sets obj.script = Some(text) for the named object.
+
+pub(crate) fn mesh_base_half_size(gltf: &GltfMesh) -> Vec3
+  Computes bounding half-extents from raw vertex positions across all
+  primitives. Falls back to Vec3::splat(0.25) for empty meshes;
+  clamps to minimum 0.01 per axis. Used by Scale gizmo to derive
+  mesh.scale ratios from cuboid half_size.
+
+pub(crate) fn voxelize_object(scene, game_dir, id) -> anyhow::Result<String>
+  1. Finds the object's mesh relative path.
+  2. Calls space_soup::voxelize::gltf_to_cuboid_glb (voxel_size=0.05).
+  3. Writes output to "<game_dir>/models/<stem>_voxel[_N].glb".
+  4. Creates a new scene object adjacent to the source (+2.2× half_size
+     offset on X), adds it to scene.objects.
+  5. Returns the new object's ID.
+
+
+------------------------------------------------------------------------
+src/app/edit_camera.rs
+------------------------------------------------------------------------
+PURPOSE
+  Free-fly orbit-less editor camera (position + yaw/pitch Euler).
+
+pub(crate) struct EditCamera
+  position: Vec3
+  yaw:   f32   (radians, unconstrained)
+  pitch: f32   (radians, clamped ±1.55)
+
+  pub fn new(position: Vec3) -> Self
+    Initialises with yaw=0, pitch=-0.25 (slight downward look).
+
+  pub fn rotation() -> Quat
+    Quat::from_euler(YXZ, yaw, pitch, 0.0)
+
+  pub fn forward() -> Vec3
+    rotation() * Vec3::NEG_Z
+
+  pub fn right() -> Vec3
+    Derived from yaw only: Vec3::new(yaw.cos(), 0, -yaw.sin()).
+    Stays level regardless of pitch.
+
+  pub fn look(dx, dy)
+    yaw  -= dx * 0.006
+    pitch = (pitch - dy * 0.006).clamp(-1.55, 1.55)
+
+  pub fn pan(dx, dy)
+    Strafes along right() and world Y. Speed = 0.004.
+
+  pub fn dolly(d)
+    Moves along forward(). Used for scroll-wheel and pinch zoom.
+
+
+------------------------------------------------------------------------
+src/app/discover.rs
+------------------------------------------------------------------------
+PURPOSE
+  File-system discovery and platform glue (font loading, key mapping).
+
+pub(crate) fn game_dir() -> PathBuf
+  Returns PathBuf::from("../game").
+
+pub(crate) fn discover_json(dir: &Path) -> Vec<PathBuf>
+  Recursively searches dir and one level of subdirs for *.json files.
+  Returns sorted list.
+
+pub(crate) fn discover_models(dir: &Path) -> Vec<PathBuf>
+  Searches "<dir>/models/" for *.glb and *.gltf files (case-insensitive).
+  Returns sorted list.
+
+pub(crate) fn load_font() -> Font
+  Reads "font.ttf" from the current working directory.
+  Panics with a descriptive message if missing.
+
+pub(crate) fn winit_key_to_agate(key: &Key) -> Option<agate::input::NamedKey>
+  Maps winit NamedKey variants to agate NamedKey:
+  ArrowLeft/Right/Up/Down, Home, End, PageUp/Down,
+  Backspace, Delete, Enter, Tab, Escape.
+
+
+------------------------------------------------------------------------
+src/app/picking.rs
+------------------------------------------------------------------------
+PURPOSE
+  Ray-casting helpers: screen-to-ray, AABB intersection, floor plane.
+
+impl App
+  pub(crate) fn screen_ray(sx, sy, win_w, win_h) -> (Vec3, Vec3)
+    Converts pixel (sx,sy) to a world ray using a manual NDC unproject
+    with FOV_Y = 60°. Returns (camera.position, world_dir).
+
+  pub(crate) fn pick_object(sx, sy, w, h) -> Option<String>
+    Tests all non-hidden scene objects via ray_aabb_hit, returns the
+    ID of the closest hit (minimum positive t).
+
+pub(crate) fn ray_aabb_hit(origin, dir, center, half) -> Option<f32>
+  Standard slab method. Returns Some(t_entry ≥ 0) or None.
+  Handles axis-aligned ray components (|d| < 1e-8) as a containment
+  test for that axis.
+
+pub(crate) fn ray_plane_intersect(origin, dir, plane_y) -> Option<Vec3>
+  Horizontal plane (Y = plane_y) intersection. Returns None if ray is
+  parallel (|dir.y| < 1e-5) or behind origin.
+
+
+------------------------------------------------------------------------
+src/app/render/mod.rs
+------------------------------------------------------------------------
+PURPOSE
+  Main render loop — called every frame from App::redraw().
+
+impl App
+  pub(crate) fn redraw()
+    1. Computes dt; calls runtime.update or runtime.render_lists.
+    2. On scene switch: loads new scene, pre-loads new mesh GLBs.
+    3. Loads any unloaded meshes referenced by current scene objects.
+    4. Builds player-transform closure (yaw + offset) from packet.
+    5. Sets camera from ViewMode (PlayerView / FirstPerson / Edit).
+    6. Calls render::scene::build_cuboids → Vec<Cuboid>.
+    7. Acquires surface texture, creates render target view.
+    8. Syncs render_meshes list into mesh_cache GltfMesh transforms.
+    9. Calls render::scene::sync_gizmo_and_collect → Vec<MeshInstance>.
+    10. Calls renderer.render_with_meshes(view, camera, cuboids, meshes).
+    11. Runs agate UI frame:
+          toolbar, navigator, inspector, viewport_overlay, statusbar.
+    12. Handles script-editor sync (editor.dirty → set_object_script).
+    13. Submits overlay render pass, presents frame.
+    14. Processes clicked_nav (open_file).
+
+fn draw_editor_tab(ui, theme, layout, editor, editor_focused, title)
+  [private]  Draws the tab bar above the text editor area with dirty
+  indicator (●), title, and the TextEditor widget itself.
+
+
+------------------------------------------------------------------------
+src/app/render/scene.rs
+------------------------------------------------------------------------
+PURPOSE
+  Per-frame scene content assembly: cuboid lists and gizmo sync.
+
+CONSTANT (pub(crate))
+  GIZMO_ANCHOR_MARGIN: f32 = 0.35
+    Extra vertical clearance above the object's top face where the
+    gizmo's origin floats (avoids visual overlap with the object).
+
+pub(crate) fn gizmo_anchor(obj: &GameObject) -> Vec3
+  obj.cuboid.position + Vec3::Y * (half_size.y + GIZMO_ANCHOR_MARGIN)
+
+pub(crate) fn build_cuboids(
+    render_cuboids, packet, head_pos, head_rot, to_world,
+    objects, selected_id, is_edit, dragging_new_model, ghost_preview,
+) -> Vec<Cuboid>
+  1. Converts engine render_cuboids via engine_cuboid_to_render.
+  2. Appends ground_grid().
+  3. Appends build_player_overlay(...).
+  4. In Edit mode: draws wireframe outlines for mesh objects and the
+     selected object (yellow wire for selected, faint white otherwise).
+  5. If dragging_new_model and ghost_preview is Some: draws a cyan
+     wireframe preview cube at the drop position.
+
+pub(crate) fn sync_gizmo_and_collect<'a>(
+    xform_gizmo, gizmo_assets, camera, viewport,
+    objects, selected_id, view_mode, show_editor, is_dragging,
+) -> Vec<MeshInstance<'a>>
+  Guards: returns empty if not in Edit mode, or editor is open,
+  or no object is selected.
+  Sets xform_gizmo position to gizmo_anchor(obj).
+  If not currently dragging: syncs rotation and scale from object.
+  Returns xform_gizmo.collect_mesh_instances(assets, camera, viewport).
+
+
+------------------------------------------------------------------------
+src/app/render/navigator.rs
+------------------------------------------------------------------------
+PURPOSE
+  Draws the left navigator panel (scene files + scene objects list).
+
+pub(crate) fn draw(
+    ui, theme, layout, nav_rows, files_discovered, objects,
+    selected_file, selected_object, editing,
+    nav_scenes_open, nav_objects_open, packet,
+) -> Option<usize>
+  1. Draws panel background and border.
+  2. Clips a scroll area for the row list.
+  3. Iterates nav_rows, culling off-screen rows:
+       GroupHeader → collapsible section header (toggles open/closed).
+       SceneFile   → selectable row; returns Some(file_index) on click.
+       Object      → selectable row; sets selected_object on click.
+       EmptyHint   → disabled hint text.
+  4. Draws a footer below the scroll area showing scene stats from
+     the live DebugPacket (scene name, object/cuboid/mesh counts).
+  Returns Some(file_index) if a scene file was clicked, else None.
+
+
+------------------------------------------------------------------------
+src/app/render/inspector.rs
+------------------------------------------------------------------------
+PURPOSE
+  Draws the right inspector panel: object properties or editor info.
+
+pub(crate) fn draw(
+    ui, theme, layout, editing, editor, scene, game_dir,
+    selected_object, scene_dirty, open_script_editor, _packet,
+)
+  Panel header shows "INSPECTOR" / "EDITOR" / "SCRIPT" depending on
+  editing state.
+  If editing is Some → draw_editor_info (cursor position, shortcuts).
+  Else if object selected → draw_object_cards.
+  Else → "Nothing selected" hint.
+
+fn draw_editor_info(...)  [private]
+  Shows file/object name, line count, cursor Ln/Col, modified flag,
+  and keyboard shortcut reference.
+
+fn draw_object_cards(...)  [private]
+  Draws the following inspector cards for the selected object:
+    Name row     — object ID as read-only label.
+    POSITION     — three float text inputs (X/Y/Z), full meters.
+    SIZE         — three float inputs (full diameter; stored as half).
+    ROTATION     — three float inputs in degrees (YXZ Euler order).
+    COLOR        — color swatch (read-only display).
+    Voxelize     — button (only if object has a mesh).
+    Add/Edit Script — button; creates a stub script if none exists.
+    Duplicate    — clones object with unique ID, offset +0.1 on X/Z.
+    Delete       — removes object from scene.
+  All edits set scene_dirty = true.
+
+fn default_script_stub(id) -> String  [private]
+  Returns "// Script for '<id>'\n\nfn on_update(dt) {\n}\n".
+
+fn unique_id(scene, base) -> String  [private]
+  Strips trailing digits/underscores from base, appends _2, _3, …
+  until unique. (Inspector-local variant; scene_bridge has its own.)
+
+fn split_row(row, label_w, field_gap) -> (Rect, Rect)  [private]
+  Splits a row rect into a narrow axis label and a wider input field.
+
+
+------------------------------------------------------------------------
+src/app/render/toolbar.rs
+------------------------------------------------------------------------
+PURPOSE
+  Draws the top toolbar: view-mode selector, editor toggle, save buttons.
+
+pub(crate) fn draw(
+    ui, theme, layout, view_mode, edit_camera,
+    last_world_head, editing, selected_file, _editor,
+)
+  Draws toolbar background and bottom separator.
+  Segmented control (3 buttons): Player / First Person / Edit.
+    Switching to Edit resets edit_camera to last_world_head.
+    Switching away clears editing.
+  Editor button: toggles editing = Some(SceneFile) if a file is
+    selected; otherwise a no-op.
+
+pub(crate) fn draw_save(ui, theme, layout, editing, dirty) -> bool
+  "Save" button — enabled only when SceneFile editor is open AND dirty.
+  Returns true when clicked and enabled.
+
+pub(crate) fn draw_save_scene(ui, theme, layout, scene_dirty) -> bool
+  "Save Scene" button — enabled (green) whenever scene_dirty.
+  Returns true when clicked and enabled.
+
+
+------------------------------------------------------------------------
+src/app/render/statusbar.rs
+------------------------------------------------------------------------
+PURPOSE
+  Draws the bottom status bar: file/scene name, cursor position, FPS.
+
+pub(crate) fn draw(
+    ui, theme, layout,
+    show_editor: bool, editor,
+    scene_name, fps, frame_count,
+)
+  Left side:  file path (editor mode) or "Scene: <name>".
+  Centre:     cursor "Ln N, Col N  (sel)" when editor is shown.
+  Right side: "<fps> fps · frame <count>".
+
+
+------------------------------------------------------------------------
+src/app/render/viewport_overlay.rs
+------------------------------------------------------------------------
+PURPOSE
+  Draws Edit-mode overlays on the 3D viewport:
+  gizmo mode buttons and model drag tray.
+
+pub(crate) fn draw(
+    ui, theme, layout,
+    available_models, dragging_new_model,
+    _gizmo_drag, current_mode,
+) -> Option<GizmoMode>
+  Mode buttons (Move / Rotate / Scale) at viewport top-left.
+    Active button uses ACCENT background.
+  Model tray at viewport bottom:
+    "Drag a model into the scene" label.
+    One labelled chip per available model GLB/GLTF.
+    Active drag chip uses ACCENT highlight.
+  Returns Some(GizmoMode) if a mode button was clicked, else None.
+
+
+------------------------------------------------------------------------
+src/app/input/mod.rs
+------------------------------------------------------------------------
+PURPOSE
+  Single dispatch point for all winit WindowEvents.
+
+pub(crate) fn handle_window_event(app, event_loop, _id, event)
+  Matches on WindowEvent variants and dispatches to:
+    CloseRequested       → event_loop.exit()
+    ScaleFactorChanged   → resize::scale_factor_changed
+    Resized              → resize::resized
+    ModifiersChanged     → stores app.mods
+    KeyboardInput        → keyboard::handle_key (Pressed only)
+    CursorMoved          → mouse::cursor_moved
+    MouseInput (Left)    → mouse::left_button
+    PinchGesture         → gesture::pinch
+    MouseWheel           → gesture::mouse_wheel
+    RedrawRequested      → app.redraw()
+
+
+------------------------------------------------------------------------
+src/app/input/mouse.rs
+------------------------------------------------------------------------
+PURPOSE
+  Mouse cursor movement and left-button press/release logic.
+
+pub(crate) fn cursor_moved(app, position: PhysicalPosition<f64>)
+  Updates mouse_pos, last_mouse_pos.
+  In Edit mode (not editing):
+    If gizmo_dragging → calls xform_gizmo.drag + apply_gizmo_drag.
+    Else if gizmo_drag (Orbit/Pan/Zoom) → camera look/pan/dolly.
+    Else if moving_object → moves object on Y=plane_y via ray cast.
+    Else if left_down + sufficient delta → free-look (look(dx,dy)).
+  Updates ghost_preview for model drag.
+  Updates hovered_axis via raycast_gizmo when not dragging.
+
+pub(crate) fn left_button(app, state: ElementState)
+  Pressed:
+    Resets drag state, sets left_down, distributes to mouse_pressed/held.
+    Editor focus: true iff clicking inside editor_body.
+    press_in_chrome: true if click is over navigator/inspector/outside.
+    In Edit mode (not editing):
+      Model chip click → starts dragging_new_model.
+      Ghost drop → calls place_dropped_model.
+      Gizmo hit → begin_drag; sets gizmo_dragging.
+      Camera gizmo icon → sets gizmo_drag part.
+      Object click → picks object; double-click → moving_object mode.
+  Released:
+    Clears left_down, gizmo_drag.
+    Ends gizmo drag via end_drag.
+    Single click in viewport (no drag) → pick_object → selected_object.
+
+fn apply_gizmo_drag_to_selected_object(app)  [private]
+  Reads gizmo position/rotation/scale and writes back to the selected
+  object in the scene:
+    Translate → cuboid.position (accounting for GIZMO_ANCHOR_MARGIN).
+    Rotate    → cuboid.rotation.
+    Scale     → cuboid.half_size; also updates mesh.scale as ratio
+                of new half_size / mesh_base_half_size (lazy-computed
+                from mesh_cache if not yet in mesh_base_half_size).
+  Sets scene_dirty = true.
+
+fn place_dropped_model(app, model_path, pos: Vec3)  [private]
+  Strips game_dir prefix to get a relative path.
+  Calls unique_id + new_object; pushes to scene.objects.
+  Selects the new object, marks scene dirty.
+
+
+------------------------------------------------------------------------
+src/app/input/keyboard.rs
+------------------------------------------------------------------------
+PURPOSE
+  Keyboard input dispatch for both viewport and text-editor contexts.
+
+pub(crate) fn handle_key(app, event: &KeyEvent)
+  If editing and editor_focused → editor_key.
+  Otherwise:
+    Accumulates printable text into app.text_input (non-cmd).
+    'W' / 'w' → GizmoMode::Translate
+    'E' / 'e' → GizmoMode::Rotate
+    'R' / 'r' → GizmoMode::Scale
+    Converts winit NamedKey to agate NamedKey for UI widgets.
+
+fn editor_key(app, ev: &KeyEvent)  [private]
+  Dispatches to TextEditor methods:
+    Arrow keys, Home, End, PageUp/Down — with shift for selection.
+    Backspace, Delete, Enter, Tab, Space.
+    Cmd+S  → editor.save()
+    Cmd+A  → select_all
+    Cmd+C/X/V → copy / cut / paste
+    Cmd+Z  → undo;  Cmd+Shift+Z → redo
+    Other printable chars → insert_char.
+
+
+------------------------------------------------------------------------
+src/app/input/gesture.rs
+------------------------------------------------------------------------
+PURPOSE
+  Trackpad pinch and scroll-wheel handling for the edit camera.
+
+pub(crate) fn pinch(app, delta: f64, phase: TouchPhase)
+  In Edit mode (not editing) and over viewport:
+    edit_camera.dolly(delta * 0.8).
+
+pub(crate) fn mouse_wheel(app, delta: MouseScrollDelta)
+  Always accumulates scroll_y (for agate UI scroll areas).
+  In Edit mode (not editing) over viewport:
+    Cmd/Ctrl + scroll → dolly (zoom in/out, speed 0.002).
+    Plain scroll      → pan (trackpad two-finger pan, raw pixel delta).
+
+fn over_viewport(app) -> bool  [private]
+  Returns true if mouse_pos is inside layout.center but outside
+  navigator and inspector panels.
+
+
+------------------------------------------------------------------------
+src/app/input/resize.rs
+------------------------------------------------------------------------
+PURPOSE
+  Handles HiDPI scale changes and window resizes.
+
+pub(crate) fn scale_factor_changed(app, scale_factor: f32)
+  Updates app.scale; propagates to overlay.set_scale_factor and
+  ui.theme = Theme::new(scale_factor).
+
+pub(crate) fn resized(app, size: PhysicalSize<u32>)
+  Reconfigures wgpu surface, calls renderer.resize and overlay.resize,
+  updates camera.aspect ratio.
+
+
+================================================================
+DATA FLOW SUMMARY
+================================================================
+
+Network thread
+  TcpListener → PacketReader::read_packet()
+              → Mutex<DebugPacket> (updated every packet)
+
+Per frame (App::redraw)
+  Lock DebugPacket
+    → player-space → world-space transform closure
+    → camera position (per ViewMode)
+  GameRuntime::update or render_lists
+    → render_cuboids (engine scene)
+    → render_meshes  (engine scene)
+  build_cuboids
+    → engine cuboids + grid + player overlay + edit wireframes
+  sync_gizmo_and_collect
+    → MeshInstances for gizmo parts (Edit mode only)
+  renderer.render_with_meshes
+    → GPU draw call
+  agate UI frame
+    → toolbar / navigator / inspector / viewport_overlay / statusbar
+    → overlay.render (2D UI draw call)
+  surface.present
+
+Mouse input → gizmo raycasting / drag → scene mutation → scene_dirty
+Keyboard  W/E/R → GizmoMode switch
+Save Scene button → scene_bridge::save_scene → JSON on disk
+Save (editor) → TextEditor::save → file on disk
