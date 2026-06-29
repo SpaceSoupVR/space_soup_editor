@@ -1,6 +1,6 @@
 use glam::{Vec3, Quat};
 use space_soup::renderer::{Cuboid, Color3};
-use space_soup_engine::{HandSample, RenderCuboid};
+use space_soup_engine::{HandSample, RenderCuboid, Hand, Transform, build_hand, FingerCurls};
 
 
 pub fn engine_cuboid_to_render(rc: &RenderCuboid) -> Cuboid {
@@ -52,14 +52,15 @@ pub fn build_player_overlay(
         c
     });
 
-    push_hand(&mut cuboids, left_hand,  Color3(180, 200, 255, 255), &hand_transform);
-    push_hand(&mut cuboids, right_hand, Color3(255, 200, 180, 255), &hand_transform);
+    push_hand(&mut cuboids, Hand::Left,  left_hand,  Color3(180, 200, 255, 255), &hand_transform);
+    push_hand(&mut cuboids, Hand::Right, right_hand, Color3(255, 200, 180, 255), &hand_transform);
 
     cuboids
 }
 
 fn push_hand(
     cuboids: &mut Vec<Cuboid>,
+    handedness: Hand,
     hand: &HandSample,
     color: Color3,
     transform: &impl Fn(Vec3, Quat) -> (Vec3, Quat),
@@ -80,20 +81,29 @@ fn push_hand(
             cuboids.push(c);
         }
     } else {
+        // Controller fallback: draw the same procedural cube hand the headset
+        // uses, anchored to the (locomotion-transformed) grip pose. Fingers
+        // curl from trigger / grip pressure.
         if let Some(grip) = hand.grip {
-            let (pos, rot) = transform(grip.position(), grip.rotation());
-            let mut c = Cuboid::solid_and_wire(
-                pos, Vec3::new(0.035, 0.035, 0.06), color, Color3(255, 255, 255, 200),
-            );
-            c.rotation = rot;
-            cuboids.push(c);
+            let (gp, gr) = transform(grip.position(), grip.rotation());
+            let curls = FingerCurls {
+                thumb:  0.0,
+                index:  hand.trigger,
+                middle: hand.squeeze,
+                ring:   hand.squeeze,
+                little: hand.squeeze,
+            };
+            for hc in build_hand(Transform::new(gp, gr), handedness, &curls) {
+                let mut c = Cuboid::solid(
+                    hc.position, hc.half_size,
+                    Color3(hc.color.0, hc.color.1, hc.color.2, hc.color.3),
+                );
+                c.rotation = hc.rotation;
+                cuboids.push(c);
+            }
         }
         if let Some(aim) = hand.aim {
             let (aim_pos, aim_rot) = transform(aim.position(), aim.rotation());
-            let mut c = Cuboid::wireframe(aim_pos, Vec3::splat(0.02), color);
-            c.rotation = aim_rot;
-            cuboids.push(c);
-
             let dir = aim_rot * Vec3::new(0.0, 0.0, -1.0);
             for i in 1..6 {
                 let t = i as f32 * 0.06;
