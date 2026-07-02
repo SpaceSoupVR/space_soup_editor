@@ -211,11 +211,9 @@ impl super::App {
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
 
-        // Vertical hairline dividers at sidebar boundaries (Xcode-style)
-        let nav_right = layout.navigator[0] + layout.navigator[2];
-        let ins_left = layout.inspector[0];
-        ui.separator_v(nav_right, layout.center[1], layout.center[3]);
-        ui.separator_v(ins_left, layout.center[1], layout.center[3]);
+        if self.view_mode == ViewMode::Edit {
+            ui.card_border(layout.center);
+        }
 
         toolbar::draw(ui, &theme, &layout, &mut self.view_mode, &mut self.edit_camera,
             self.last_world_head, &mut self.editing, self.selected_file, &self.editor);
@@ -337,7 +335,7 @@ fn draw_editor_tab(
     ui.label_styled(
         layout.editor_tab[0] + theme.px(super::layout::PAD),
         layout.editor_tab[1] + (layout.editor_tab[3] - theme.body()) * 0.5,
-        &title, theme.body(), t::TEXT_PRIMARY, layout.editor_tab[2], None,
+        &title, theme.body(), t::TEXT_PRIMARY, layout.editor_tab[2], Some(layout.editor_tab),
     );
 
     let focused = *editor_focused;

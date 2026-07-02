@@ -18,8 +18,7 @@ pub(crate) fn draw(
     selected_file: Option<usize>,
     _editor: &TextEditor,
 ) {
-    ui.fill(layout.toolbar, t::TITLEBAR_BG);
-    ui.separator(0.0, layout.toolbar[1] + layout.toolbar[3] - theme.px(1.0), layout.toolbar[2]);
+    ui.panel_bordered(layout.toolbar, t::TITLEBAR_BG);
 
     let is_file_editor = matches!(editing, Some(EditTarget::SceneFile));
 

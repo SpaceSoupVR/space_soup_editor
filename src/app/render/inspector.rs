@@ -25,8 +25,7 @@ pub(crate) fn draw(
     open_script_editor: &mut Option<String>,
     _packet: &space_soup_engine::DebugPacket,
 ) {
-    // Flat Xcode-style inspector — flush fill, no floating card border
-    ui.fill(layout.inspector, t::SIDEBAR_BG);
+    ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
 
     let ix = layout.inspector[0];
     let iy = layout.inspector[1];
@@ -36,10 +35,10 @@ pub(crate) fn draw(
         Some(EditTarget::ObjectScript(_)) => "SCRIPT",
         None => "INSPECTOR",
     };
-    ui.label_styled(ix + theme.px(PAD), iy + theme.px(12.0),
-        hdr, theme.small(), t::TEXT_SECONDARY, iw, None);
-    let body_top = iy + theme.px(ROW_H + 10.0);
     let clip_ins = layout.inspector;
+    ui.label_styled(ix + theme.px(PAD), iy + theme.px(12.0),
+        hdr, theme.small(), t::TEXT_SECONDARY, iw, Some(clip_ins));
+    let body_top = iy + theme.px(ROW_H + 10.0);
 
     if editing.is_some() {
         draw_editor_info(ui, theme, ix, iw, body_top, clip_ins, editor, editing);
@@ -99,7 +98,7 @@ fn draw_object_cards(
     };
 
     ui.label_styled(cards.name_row[0], cards.name_row[1] + (cards.name_row[3] - theme.body()) * 0.5,
-        id, theme.body(), t::TEXT_PRIMARY, cards.name_row[2], None);
+        id, theme.body(), t::TEXT_PRIMARY, cards.name_row[2], Some(clip_ins));
 
     let label_w = theme.px(18.0);
     let field_gap = theme.px(6.0);

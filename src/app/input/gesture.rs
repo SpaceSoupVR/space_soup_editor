@@ -25,7 +25,7 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
 
     if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
         if app.mods.super_key() || app.mods.control_key() {
-            app.edit_camera.dolly(dy * 0.002);
+            app.edit_camera.dolly(-dy * 0.002);
         } else {
             app.edit_camera.pan(dx, dy);
         }

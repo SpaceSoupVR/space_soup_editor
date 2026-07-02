@@ -8,6 +8,7 @@ pub(crate) const TAB_BAR_H: f32 = 28.0;
 pub(crate) const ROW_H: f32 = 30.0;
 pub(crate) const PAD: f32 = 12.0;
 pub(crate) const PANEL_GAP: f32 = 12.0;
+pub(crate) const WINDOW_MARGIN: f32 = 16.0;
 
 pub(crate) type Rect = [f32; 4];
 
@@ -41,40 +42,48 @@ impl Layout {
         let nav_w = theme.px(NAVIGATOR_W);
         let ins_w = theme.px(INSPECTOR_W);
         let tab_h = theme.px(TAB_BAR_H);
+        let margin = theme.px(WINDOW_MARGIN);
+        let gap = theme.px(PANEL_GAP);
 
-        let toolbar = rect_from(0.0, 0.0, win_w, tb_h);
+        // Floating panels: every panel is inset from the window edge by
+        // `margin` and separated from its neighbors by `gap`, so the 3D
+        // viewport shows through behind them instead of panels tiling
+        // edge-to-edge.
+        let toolbar = rect_from(margin, margin, (win_w - 2.0 * margin).max(0.0), tb_h);
 
-        let body_y = tb_h;
-        let body_h = (win_h - tb_h - sb_h).max(0.0);
+        let body_y = margin + tb_h + gap;
+        let body_h = (win_h - body_y - gap - sb_h - margin).max(0.0);
 
-        // Flush panels — no floating gap
-        let navigator = rect_from(0.0, body_y, nav_w, body_h);
-        let inspector = rect_from(win_w - ins_w, body_y, ins_w, body_h);
-        let center = rect_from(nav_w, body_y, (win_w - nav_w - ins_w).max(0.0), body_h);
+        let navigator = rect_from(margin, body_y, nav_w, body_h);
+        let inspector = rect_from((win_w - margin - ins_w).max(0.0), body_y, ins_w, body_h);
+        let center = rect_from(
+            margin + nav_w + gap, body_y,
+            (win_w - 2.0 * margin - nav_w - ins_w - 2.0 * gap).max(0.0), body_h,
+        );
 
-        let statusbar = rect_from(0.0, win_h - sb_h, win_w, sb_h);
+        let statusbar = rect_from(margin, win_h - margin - sb_h, (win_w - 2.0 * margin).max(0.0), sb_h);
 
-        // Editor fills the full center column, flush from body_y
-        let editor_tab = rect_from(nav_w, body_y, center[2], tab_h);
-        let editor_body = rect_from(nav_w, body_y + tab_h, center[2], (body_h - tab_h).max(0.0));
+        let editor_tab = rect_from(center[0], body_y, center[2], tab_h);
+        let editor_body = rect_from(center[0], body_y + tab_h, center[2], (body_h - tab_h).max(0.0));
 
         let pad = theme.px(PAD);
         let seg_h = theme.px(30.0);
         let seg_w = theme.px(100.0);
-        let seg_y = (tb_h - seg_h) * 0.5;
-        // Flush segment buttons — no gap between them
+        let seg_y = toolbar[1] + (tb_h - seg_h) * 0.5;
+        let seg_x0 = toolbar[0] + pad;
         let seg = [
-            rect_from(pad, seg_y, seg_w, seg_h),
-            rect_from(pad + seg_w, seg_y, seg_w, seg_h),
-            rect_from(pad + 2.0 * seg_w, seg_y, seg_w, seg_h),
-            rect_from(pad + 3.0 * seg_w, seg_y, seg_w, seg_h),
+            rect_from(seg_x0, seg_y, seg_w, seg_h),
+            rect_from(seg_x0 + seg_w, seg_y, seg_w, seg_h),
+            rect_from(seg_x0 + 2.0 * seg_w, seg_y, seg_w, seg_h),
+            rect_from(seg_x0 + 3.0 * seg_w, seg_y, seg_w, seg_h),
         ];
         // Combined pill bounding rect for all 4 segments
-        let seg_pill = rect_from(pad, seg_y, 4.0 * seg_w, seg_h);
+        let seg_pill = rect_from(seg_x0, seg_y, 4.0 * seg_w, seg_h);
 
         let bw = theme.px(80.0);
         let btn_gap = theme.px(8.0);
-        let btn_save = rect_from(win_w - pad - bw, seg_y, bw, seg_h);
+        let toolbar_right = toolbar[0] + toolbar[2];
+        let btn_save = rect_from(toolbar_right - pad - bw, seg_y, bw, seg_h);
         let btn_editor = rect_from(btn_save[0] - btn_gap - bw, seg_y, bw, seg_h);
         let btn_save_scene = rect_from(btn_editor[0] - btn_gap - theme.px(110.0), seg_y, theme.px(110.0), seg_h);
 

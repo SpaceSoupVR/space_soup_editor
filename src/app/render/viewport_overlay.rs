@@ -77,8 +77,7 @@ pub(crate) fn draw(
     }
 
     let tray = layout.model_tray(theme);
-    ui.panel(tray, Color(20, 20, 24, 230));
-    ui.card_border(tray);
+    ui.panel_bordered(tray, Color(20, 20, 24, 230));
 
     let cx = tray[0] + theme.px(12.0);
     let cw = tray[2] - theme.px(24.0);
@@ -87,13 +86,13 @@ pub(crate) fn draw(
         ui.label_styled(
             cx, tray[1] + theme.px(6.0),
             "No models found in game/models/",
-            theme.small(), t::TEXT_SECONDARY, cw, None,
+            theme.small(), t::TEXT_SECONDARY, cw, Some(tray),
         );
     } else {
         ui.label_styled(
             cx, tray[1] + theme.px(6.0),
             "Drag a model into the scene",
-            theme.small(), t::TEXT_SECONDARY, cw, None,
+            theme.small(), t::TEXT_SECONDARY, cw, Some(tray),
         );
         let model_rects = layout.model_rects(theme, available_models.len());
         for (i, r) in model_rects.iter().enumerate() {
@@ -107,7 +106,7 @@ pub(crate) fn draw(
             ui.panel(*r, bg);
             ui.label_styled(
                 r[0] + theme.px(10.0), r[1] + (r[3] - theme.small()) * 0.5,
-                &label, theme.small(), fg, r[2] - theme.px(20.0), None,
+                &label, theme.small(), fg, r[2] - theme.px(20.0), Some(*r),
             );
         }
     }

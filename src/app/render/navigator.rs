@@ -23,8 +23,7 @@ pub(crate) fn draw(
     nav_objects_open: &mut bool,
     packet: &DebugPacket,
 ) -> Option<usize> {
-    // Flat Xcode-style sidebar — flush fill, no floating card border
-    ui.fill(layout.navigator, t::SIDEBAR_BG);
+    ui.panel_bordered(layout.navigator, t::SIDEBAR_BG);
 
     let nav = layout.navigator;
     let footer_h = theme.px(FOOTER_H);
