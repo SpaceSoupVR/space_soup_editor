@@ -7,6 +7,7 @@ pub(crate) mod picking;
 pub(crate) mod render;
 pub(crate) mod scene_bridge;
 pub(crate) mod setup;
+pub(crate) mod snap;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -20,7 +21,7 @@ use wgpu::{Instance, InstanceDescriptor, Surface, SurfaceConfiguration};
 use space_soup::renderer::{Camera, GltfMesh, Renderer};
 use space_soup::renderer::mesh_pipeline::ModelUniform;
 use space_soup::ui2d::Overlay;
-use space_soup_engine::GameRuntime;
+use space_soup_engine::{GameRuntime, Hand};
 
 use agate::{AMouseButton, TextEditor, Ui};
 
@@ -34,6 +35,7 @@ use edit_camera::EditCamera;
 pub(crate) enum ViewMode {
     PlayerView,
     FirstPerson,
+    RenderView,
     Edit,
 }
 
@@ -42,6 +44,13 @@ pub(crate) enum GizmoPart {
     Orbit,
     Pan,
     Zoom,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum EditorTool {
+    Select,
+    Rigging,
+    Snap,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +97,7 @@ pub(crate) struct App {
 
     pub(crate) mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
     pub(crate) mesh_base_half_size: HashMap<String, glam::Vec3>,
+    pub(crate) debug_meshes: Vec<(GltfMesh, ModelUniform)>,
 
     pub(crate) view_mode: ViewMode,
     pub(crate) edit_camera: EditCamera,
@@ -125,6 +135,12 @@ pub(crate) struct App {
 
     pub(crate) files_discovered: Vec<PathBuf>,
     pub(crate) available_models: Vec<PathBuf>,
+
+    pub(crate) tool: EditorTool,
+    pub(crate) rig_selection: Vec<String>,
+    pub(crate) snap_hand: Hand,
+    pub(crate) snap_selected_joint: Option<usize>,
+    pub(crate) snap_joint_frame: Vec<snap::SnapJoint>,
 }
 
 impl App {
@@ -161,6 +177,7 @@ impl App {
             scale: 1.0,
             mesh_cache: HashMap::new(),
             mesh_base_half_size: HashMap::new(),
+            debug_meshes: Vec::new(),
 
             view_mode: ViewMode::PlayerView,
             edit_camera: EditCamera::new(glam::Vec3::new(0.0, 1.2, 0.0)),
@@ -198,6 +215,12 @@ impl App {
 
             files_discovered: files,
             available_models: models,
+
+            tool: EditorTool::Select,
+            rig_selection: Vec::new(),
+            snap_hand: Hand::Right,
+            snap_selected_joint: None,
+            snap_joint_frame: Vec::new(),
         }
     }
 

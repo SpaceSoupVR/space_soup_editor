@@ -10,7 +10,15 @@ use super::super::layout::{in_rect, Layout};
 use super::super::picking::ray_plane_intersect;
 use super::super::render::scene::GIZMO_ANCHOR_MARGIN;
 use super::super::scene_bridge::{mesh_base_half_size, new_object, unique_id};
-use super::super::{App, GizmoPart, ViewMode};
+use super::super::snap;
+use super::super::{App, EditorTool, GizmoPart, ViewMode};
+
+fn has_gizmo_target(app: &App) -> bool {
+    match app.tool {
+        EditorTool::Snap => app.snap_selected_joint.is_some(),
+        _ => app.selected_object.is_some(),
+    }
+}
 
 pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     let new = (position.x as f32, position.y as f32);
@@ -30,7 +38,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
 
     if app.view_mode == ViewMode::Edit
         && app.editing.is_none()
-        && app.selected_object.is_some()
+        && has_gizmo_target(app)
         && !app.gizmo_dragging
         && over_viewport
     {
@@ -43,7 +51,11 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     if app.left_down && app.view_mode == ViewMode::Edit && app.editing.is_none() {
         if app.gizmo_dragging {
             app.xform_gizmo.drag(mouse_vec2, &app.camera, viewport);
-            apply_gizmo_drag_to_selected_object(app);
+            if app.tool == EditorTool::Snap {
+                snap::apply_gizmo_drag_to_joint(app);
+            } else {
+                apply_gizmo_drag_to_selected_object(app);
+            }
             app.dragged = true;
         } else if let Some(part) = app.gizmo_drag {
             match part {
@@ -182,10 +194,15 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                     }
                     app.dragged = true;
                 } else {
-                    let xform_hit = if !app.press_in_chrome {
-                        app.selected_object.as_ref().and_then(|_|
-                            app.xform_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h))
-                        )
+                    let xform_hit = if !app.press_in_chrome && has_gizmo_target(app) {
+                        app.xform_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h))
+                    } else {
+                        None
+                    };
+
+                    let marker_hit = if app.tool == EditorTool::Snap && !app.press_in_chrome && xform_hit.is_none() {
+                        let (o, d) = app.screen_ray(mp.0, mp.1, win_w, win_h);
+                        snap::pick_joint_marker(&app.snap_joint_frame, o, d)
                     } else {
                         None
                     };
@@ -196,37 +213,70 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                         app.xform_gizmo.begin_drag(axis, mp2, &app.camera, (win_w, win_h));
                         app.gizmo_dragging = true;
                         app.dragged = true;
+                    } else if let Some(idx) = marker_hit {
+                        app.snap_selected_joint = Some(idx);
+                        if let Some(joint) = app.snap_joint_frame.get(idx) {
+                            app.xform_gizmo.set_position(joint.current_pos);
+                        }
+                        app.dragged = true;
                     } else if let Some((i, _)) = gizmo.iter().enumerate().find(|(_, r)| in_rect(mp, **r)) {
                         app.gizmo_drag = Some(gizmo_parts[i]);
                         app.dragged = true;
                     } else if !app.press_in_chrome {
-                        if let Some(id) = app.pick_object(mp.0, mp.1, win_w, win_h) {
-                            let now = std::time::Instant::now();
-                            let is_double_click = app.last_clicked_object.as_deref() == Some(id.as_str())
-                                && app.last_click_time
-                                    .map(|t| now.duration_since(t).as_millis() < 400)
-                                    .unwrap_or(false);
-
-                            if is_double_click {
-                                let plane_y = app.runtime.scene().find_object(&id)
-                                    .map(|o| o.cuboid.position.y).unwrap_or(0.0);
-                                let (o, d) = app.screen_ray(mp.0, mp.1, win_w, win_h);
-                                let offset = ray_plane_intersect(o, d, plane_y)
-                                    .and_then(|hit| {
-                                        app.runtime.scene().find_object(&id)
-                                            .map(|obj| obj.cuboid.position - hit)
-                                    })
-                                    .unwrap_or(Vec3::ZERO);
-                                app.move_anchor_offset = offset;
-                                app.moving_object = true;
+                        match app.tool {
+                            EditorTool::Rigging => {
+                                if let Some(id) = app.pick_object(mp.0, mp.1, win_w, win_h) {
+                                    if let Some(pos) = app.rig_selection.iter().position(|s| s == &id) {
+                                        app.rig_selection.remove(pos);
+                                    } else {
+                                        app.rig_selection.push(id);
+                                        if app.rig_selection.len() == 2 {
+                                            let object = app.rig_selection[0].clone();
+                                            let hand = app.rig_selection[1].clone();
+                                            snap::seed_grip_pose(app.runtime.scene_mut(), &object, Some(&hand));
+                                            app.scene_dirty = true;
+                                            app.rig_selection.clear();
+                                            app.selected_object = Some(object);
+                                        }
+                                    }
+                                    app.dragged = true;
+                                }
                             }
+                            EditorTool::Snap => {
+                                app.selected_object = app.pick_object(mp.0, mp.1, win_w, win_h);
+                                app.snap_selected_joint = None;
+                                app.dragged = true;
+                            }
+                            EditorTool::Select => {
+                                if let Some(id) = app.pick_object(mp.0, mp.1, win_w, win_h) {
+                                    let now = std::time::Instant::now();
+                                    let is_double_click = app.last_clicked_object.as_deref() == Some(id.as_str())
+                                        && app.last_click_time
+                                            .map(|t| now.duration_since(t).as_millis() < 400)
+                                            .unwrap_or(false);
 
-                            app.last_click_time = Some(now);
-                            app.last_clicked_object = Some(id.clone());
-                            app.selected_object = Some(id);
-                        } else {
-                            app.last_click_time = None;
-                            app.last_clicked_object = None;
+                                    if is_double_click {
+                                        let plane_y = app.runtime.scene().find_object(&id)
+                                            .map(|o| o.cuboid.position.y).unwrap_or(0.0);
+                                        let (o, d) = app.screen_ray(mp.0, mp.1, win_w, win_h);
+                                        let offset = ray_plane_intersect(o, d, plane_y)
+                                            .and_then(|hit| {
+                                                app.runtime.scene().find_object(&id)
+                                                    .map(|obj| obj.cuboid.position - hit)
+                                            })
+                                            .unwrap_or(Vec3::ZERO);
+                                        app.move_anchor_offset = offset;
+                                        app.moving_object = true;
+                                    }
+
+                                    app.last_click_time = Some(now);
+                                    app.last_clicked_object = Some(id.clone());
+                                    app.selected_object = Some(id);
+                                } else {
+                                    app.last_click_time = None;
+                                    app.last_clicked_object = None;
+                                }
+                            }
                         }
                     }
                 }
@@ -245,6 +295,7 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
             if app.moving_object { app.moving_object = false; }
 
             if app.view_mode == ViewMode::Edit && app.editing.is_none()
+                && app.tool == EditorTool::Select
                 && !app.dragged && !was_moving && in_rect(mp, layout.center)
                 && !app.press_in_chrome
             {

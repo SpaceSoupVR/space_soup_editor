@@ -10,13 +10,14 @@ use std::time::Instant;
 use glam::{Quat, Vec3};
 use wgpu::{CommandEncoderDescriptor, TextureViewDescriptor};
 
-use space_soup::renderer::{GltfMesh, MeshInstance};
+use space_soup::renderer::{Color3, Cuboid, GltfMesh, MeshInstance};
 use space_soup_engine::{InputFrame, LocomotionInput, PlayerRig};
 
 use agate::Theme;
 
 use super::layout::Layout;
-use super::{EditTarget, ViewMode};
+use super::snap;
+use super::{EditorTool, EditTarget, ViewMode};
 
 impl super::App {
     pub(crate) fn redraw(&mut self) {
@@ -77,6 +78,13 @@ impl super::App {
             }
         }
 
+        let game_dir_for_snap = self.runtime.game_dir().to_path_buf();
+        snap::update_preview(
+            renderer, &mut self.mesh_cache, &game_dir_for_snap, self.runtime.scene_mut(), &mut self.scene_dirty,
+            self.tool, self.selected_object.as_deref(), self.snap_hand,
+            &mut self.snap_selected_joint, &mut self.snap_joint_frame,
+        );
+
         let packet = self.packet.lock().unwrap().clone();
         let yaw_rot = Quat::from_rotation_y(packet.locomotion.player_yaw_deg.to_radians());
         let pl_offset = Vec3::from(packet.locomotion.player_offset);
@@ -90,8 +98,11 @@ impl super::App {
                 let look = (head_pos - self.camera.position).normalize_or_zero();
                 self.camera.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
             }
-            ViewMode::FirstPerson => {
-                self.camera.position = head_pos;
+            ViewMode::FirstPerson | ViewMode::RenderView => {
+                // Offset 0.15 m forward so the camera sits just in front of the
+                // head cuboid (half_size 0.10 m in Z) drawn by build_player_overlay.
+                let forward = head_rot * Vec3::NEG_Z;
+                self.camera.position = head_pos + forward * 0.15;
                 self.camera.rotation = head_rot;
             }
             ViewMode::Edit => {
@@ -100,13 +111,37 @@ impl super::App {
             }
         }
 
+        // RenderView mirrors the Quest's distance cull so you can confirm
+        // what's actually being rendered on-headset.
+        const MAX_RENDER_DIST: f32 = 40.0;
+        let (render_cuboids, render_meshes) = if self.view_mode == ViewMode::RenderView {
+            (
+                render_cuboids.into_iter().filter(|rc| rc.position.distance(head_pos) < MAX_RENDER_DIST).collect::<Vec<_>>(),
+                render_meshes.into_iter().filter(|rm| rm.position.distance(head_pos) < MAX_RENDER_DIST).collect::<Vec<_>>(),
+            )
+        } else {
+            (render_cuboids, render_meshes)
+        };
+
         let selected_id = self.selected_object.clone();
-        let cuboids = scene::build_cuboids(
+        let mut cuboids = scene::build_cuboids(
             &render_cuboids, &packet, head_pos, head_rot, to_world,
             &self.runtime.scene().objects, selected_id.as_deref(),
             self.view_mode == ViewMode::Edit,
             self.dragging_new_model.is_some(), self.ghost_preview,
         );
+
+        if self.tool == EditorTool::Snap {
+            for (i, joint) in self.snap_joint_frame.iter().enumerate() {
+                let selected = self.snap_selected_joint == Some(i);
+                let (color, half) = if selected {
+                    (Color3(255, 220, 40, 255), Vec3::splat(0.012))
+                } else {
+                    (Color3(80, 200, 255, 220), Vec3::splat(0.008))
+                };
+                cuboids.push(Cuboid::solid(joint.current_pos, half, color));
+            }
+        }
 
         let frame = match surface.get_current_texture() {
             Ok(f) => f,
@@ -119,7 +154,6 @@ impl super::App {
                 mesh.position = rm.position;
                 mesh.rotation = rm.rotation;
                 mesh.scale = rm.scale;
-                eprintln!("mesh sync: path={} scale={:?}", rm.path, rm.scale);
             }
         }
 
@@ -130,18 +164,32 @@ impl super::App {
             })
             .collect();
 
+        mesh_instances.extend(
+            self.debug_meshes.iter().map(|(mesh, model)| MeshInstance { mesh, model }),
+        );
+
         let editor_view_mode = matches!(self.editing, Some(EditTarget::SceneFile) | Some(EditTarget::ObjectScript(_)));
-        mesh_instances.extend(scene::sync_gizmo_and_collect(
-            &mut self.xform_gizmo,
-            &mut self.gizmo_assets,
-            &self.camera,
-            (win_w, win_h),
-            &self.runtime.scene().objects,
-            selected_id.as_deref(),
-            self.view_mode,
-            editor_view_mode,
-            self.gizmo_dragging,
-        ));
+        if self.tool == EditorTool::Snap {
+            let joint_pos = self.snap_selected_joint
+                .and_then(|i| self.snap_joint_frame.get(i))
+                .map(|j| j.current_pos);
+            mesh_instances.extend(snap::collect_joint_gizmo_instances(
+                &mut self.xform_gizmo, &mut self.gizmo_assets, &self.camera, (win_w, win_h),
+                joint_pos, self.gizmo_dragging,
+            ));
+        } else {
+            mesh_instances.extend(scene::sync_gizmo_and_collect(
+                &mut self.xform_gizmo,
+                &mut self.gizmo_assets,
+                &self.camera,
+                (win_w, win_h),
+                &self.runtime.scene().objects,
+                selected_id.as_deref(),
+                self.view_mode,
+                editor_view_mode,
+                self.gizmo_dragging,
+            ));
+        }
 
         renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
 
@@ -162,6 +210,12 @@ impl super::App {
 
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
+
+        // Vertical hairline dividers at sidebar boundaries (Xcode-style)
+        let nav_right = layout.navigator[0] + layout.navigator[2];
+        let ins_left = layout.inspector[0];
+        ui.separator_v(nav_right, layout.center[1], layout.center[3]);
+        ui.separator_v(ins_left, layout.center[1], layout.center[3]);
 
         toolbar::draw(ui, &theme, &layout, &mut self.view_mode, &mut self.edit_camera,
             self.last_world_head, &mut self.editing, self.selected_file, &self.editor);
@@ -200,11 +254,19 @@ impl super::App {
                 }
             }
         } else if self.view_mode == ViewMode::Edit {
-            if let Some(new_mode) = viewport_overlay::draw(
+            let (new_mode, new_tool) = viewport_overlay::draw(
                 ui, &theme, &layout, &self.available_models, &self.dragging_new_model,
-                self.gizmo_drag, self.xform_gizmo.mode,
-            ) {
+                self.gizmo_drag, self.xform_gizmo.mode, self.tool,
+            );
+            if let Some(new_mode) = new_mode {
                 self.xform_gizmo.mode = new_mode;
+            }
+            if let Some(new_tool) = new_tool {
+                if new_tool != self.tool {
+                    self.rig_selection.clear();
+                    self.snap_selected_joint = None;
+                    self.tool = new_tool;
+                }
             }
         }
 
@@ -226,9 +288,25 @@ impl super::App {
         }
 
         let show_editor_for_statusbar = matches!(self.editing, Some(EditTarget::SceneFile));
+        let tool_hint = match self.tool {
+            EditorTool::Select => None,
+            EditorTool::Rigging => Some(match self.rig_selection.len() {
+                0 => "Rigging: click a grabbable object".to_string(),
+                1 => "Rigging: click a hand reference object (or press G to seed without one)".to_string(),
+                _ => "Rigging: seeding grip pose\u{2026}".to_string(),
+            }),
+            EditorTool::Snap => Some(match (&self.selected_object, self.snap_selected_joint) {
+                (None, _) => "Snap: select an object with a grip pose".to_string(),
+                (Some(_), None) => "Snap: click a finger-joint marker to drag its curl".to_string(),
+                (Some(_), Some(i)) => self.snap_joint_frame.get(i)
+                    .map(|j| format!("Snap: dragging '{}'", j.name))
+                    .unwrap_or_default(),
+            }),
+        };
         statusbar::draw(
             ui, &theme, &layout, show_editor_for_statusbar, &self.editor,
             self.runtime.scene_name(), packet.timing.fps, packet.timing.frame_count,
+            tool_hint.as_deref(),
         );
 
         overlay.set_items(ui.finish());

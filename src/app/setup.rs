@@ -81,6 +81,19 @@ impl App {
 
         self.gizmo_assets = Some(GizmoAssets::load(&renderer));
 
+        let hand_path = self.runtime.game_dir().join("models/hand.glb");
+        for (i, x) in [-0.5_f32, 0.5_f32].into_iter().enumerate() {
+            match GltfMesh::load_static_bind_pose(&renderer.device, &renderer.queue, renderer.mesh_texture_layout(), &hand_path) {
+                Ok(mut mesh) => {
+                    mesh.position = glam::Vec3::new(x, 1.2, -1.0);
+                    let model_uniform = renderer.create_model_uniform();
+                    log::info!("space_soup_editor: loaded debug hand.glb display #{i} (bind pose, unskinned)");
+                    self.debug_meshes.push((mesh, model_uniform));
+                }
+                Err(e) => log::warn!("space_soup_editor: failed to load debug hand.glb: {e}"),
+            }
+        }
+
         self.renderer = Some(renderer);
         self.overlay = Some(overlay);
         self.surface = Some(surface);

@@ -25,8 +25,8 @@ pub(crate) fn draw(
     open_script_editor: &mut Option<String>,
     _packet: &space_soup_engine::DebugPacket,
 ) {
-    ui.panel(layout.inspector, t::SURFACE);
-    ui.card_border(layout.inspector);
+    // Flat Xcode-style inspector — flush fill, no floating card border
+    ui.fill(layout.inspector, t::SIDEBAR_BG);
 
     let ix = layout.inspector[0];
     let iy = layout.inspector[1];
@@ -104,9 +104,12 @@ fn draw_object_cards(
     let label_w = theme.px(18.0);
     let field_gap = theme.px(6.0);
     let axes = ["X", "Y", "Z"];
+    let hdr_h = theme.px(22.0);
 
-    ui.card(cards.pos_card);
-    ui.label_styled(cards.pos_card[0] + theme.px(PAD), cards.pos_card[1] + theme.px(7.0),
+    // POSITION section
+    ui.separator(cards.pos_card[0], cards.pos_card[1], cards.pos_card[2]);
+    ui.fill([cards.pos_card[0], cards.pos_card[1], cards.pos_card[2], hdr_h], t::SURFACE);
+    ui.label_styled(cards.pos_card[0] + theme.px(PAD), cards.pos_card[1] + theme.px(5.0),
         "POSITION", theme.small(), t::TEXT_SECONDARY, cards.pos_card[2], None);
     let pos_vals = [obj_position.x, obj_position.y, obj_position.z];
     for i in 0..3usize {
@@ -125,8 +128,10 @@ fn draw_object_cards(
         }
     }
 
-    ui.card(cards.sz_card);
-    ui.label_styled(cards.sz_card[0] + theme.px(PAD), cards.sz_card[1] + theme.px(7.0),
+    // SIZE section
+    ui.separator(cards.sz_card[0], cards.sz_card[1], cards.sz_card[2]);
+    ui.fill([cards.sz_card[0], cards.sz_card[1], cards.sz_card[2], hdr_h], t::SURFACE);
+    ui.label_styled(cards.sz_card[0] + theme.px(PAD), cards.sz_card[1] + theme.px(5.0),
         "SIZE", theme.small(), t::TEXT_SECONDARY, cards.sz_card[2], None);
     let sz_vals = [obj_half_size.x * 2.0, obj_half_size.y * 2.0, obj_half_size.z * 2.0];
     for i in 0..3usize {
@@ -148,8 +153,10 @@ fn draw_object_cards(
         }
     }
 
-    ui.card(cards.rot_card);
-    ui.label_styled(cards.rot_card[0] + theme.px(PAD), cards.rot_card[1] + theme.px(7.0),
+    // ROTATION section
+    ui.separator(cards.rot_card[0], cards.rot_card[1], cards.rot_card[2]);
+    ui.fill([cards.rot_card[0], cards.rot_card[1], cards.rot_card[2], hdr_h], t::SURFACE);
+    ui.label_styled(cards.rot_card[0] + theme.px(PAD), cards.rot_card[1] + theme.px(5.0),
         "ROTATION", theme.small(), t::TEXT_SECONDARY, cards.rot_card[2], None);
     let (ex, ey, ez) = obj_rotation.to_euler(EulerRot::YXZ);
     let rot_deg = [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()];
@@ -173,8 +180,10 @@ fn draw_object_cards(
         }
     }
 
-    ui.card(cards.col_card);
-    ui.label_styled(cards.col_card[0] + theme.px(PAD), cards.col_card[1] + theme.px(7.0),
+    // COLOR section
+    ui.separator(cards.col_card[0], cards.col_card[1], cards.col_card[2]);
+    ui.fill([cards.col_card[0], cards.col_card[1], cards.col_card[2], hdr_h], t::SURFACE);
+    ui.label_styled(cards.col_card[0] + theme.px(PAD), cards.col_card[1] + theme.px(5.0),
         "COLOR", theme.small(), t::TEXT_SECONDARY, cards.col_card[2], None);
     ui.color_swatch(cards.col_row, Color(obj_color.0, obj_color.1, obj_color.2, 255));
 

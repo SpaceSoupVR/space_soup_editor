@@ -1,8 +1,8 @@
 use agate::theme::Theme;
 
-pub(crate) const TOOLBAR_H: f32 = 52.0;
+pub(crate) const TOOLBAR_H: f32 = 56.0;
 pub(crate) const STATUSBAR_H: f32 = 28.0;
-pub(crate) const NAVIGATOR_W: f32 = 248.0;
+pub(crate) const NAVIGATOR_W: f32 = 256.0;
 pub(crate) const INSPECTOR_W: f32 = 300.0;
 pub(crate) const TAB_BAR_H: f32 = 28.0;
 pub(crate) const ROW_H: f32 = 30.0;
@@ -27,7 +27,8 @@ pub(crate) struct Layout {
     pub center: Rect,
     pub editor_tab: Rect,
     pub editor_body: Rect,
-    pub seg: [Rect; 3],
+    pub seg: [Rect; 4],
+    pub seg_pill: Rect,
     pub btn_editor: Rect,
     pub btn_save: Rect,
     pub btn_save_scene: Rect,
@@ -40,45 +41,46 @@ impl Layout {
         let nav_w = theme.px(NAVIGATOR_W);
         let ins_w = theme.px(INSPECTOR_W);
         let tab_h = theme.px(TAB_BAR_H);
-        let gap = theme.px(PANEL_GAP);
 
         let toolbar = rect_from(0.0, 0.0, win_w, tb_h);
 
         let body_y = tb_h;
         let body_h = (win_h - tb_h - sb_h).max(0.0);
-        let center = rect_from(0.0, body_y, win_w, body_h);
 
-        let panel_y = body_y + gap;
-        let panel_h = (body_h - gap * 2.0).max(0.0);
-        let navigator = rect_from(gap, panel_y, nav_w, panel_h);
-        let inspector = rect_from(win_w - ins_w - gap, panel_y, ins_w, panel_h);
+        // Flush panels — no floating gap
+        let navigator = rect_from(0.0, body_y, nav_w, body_h);
+        let inspector = rect_from(win_w - ins_w, body_y, ins_w, body_h);
+        let center = rect_from(nav_w, body_y, (win_w - nav_w - ins_w).max(0.0), body_h);
 
         let statusbar = rect_from(0.0, win_h - sb_h, win_w, sb_h);
 
-        let ed_x = navigator[0] + navigator[2] + gap;
-        let ed_w = (inspector[0] - ed_x - gap).max(0.0);
-        let editor_tab = rect_from(ed_x, panel_y, ed_w, tab_h);
-        let editor_body = rect_from(ed_x, panel_y + tab_h, ed_w, (panel_h - tab_h).max(0.0));
+        // Editor fills the full center column, flush from body_y
+        let editor_tab = rect_from(nav_w, body_y, center[2], tab_h);
+        let editor_body = rect_from(nav_w, body_y + tab_h, center[2], (body_h - tab_h).max(0.0));
 
         let pad = theme.px(PAD);
         let seg_h = theme.px(30.0);
-        let seg_w = theme.px(108.0);
-        let seg_gap = theme.px(4.0);
+        let seg_w = theme.px(100.0);
         let seg_y = (tb_h - seg_h) * 0.5;
+        // Flush segment buttons — no gap between them
         let seg = [
             rect_from(pad, seg_y, seg_w, seg_h),
-            rect_from(pad + seg_w + seg_gap, seg_y, seg_w, seg_h),
-            rect_from(pad + 2.0 * (seg_w + seg_gap), seg_y, seg_w, seg_h),
+            rect_from(pad + seg_w, seg_y, seg_w, seg_h),
+            rect_from(pad + 2.0 * seg_w, seg_y, seg_w, seg_h),
+            rect_from(pad + 3.0 * seg_w, seg_y, seg_w, seg_h),
         ];
-        let bw = theme.px(86.0);
-        let btn_gap = theme.px(10.0);
+        // Combined pill bounding rect for all 4 segments
+        let seg_pill = rect_from(pad, seg_y, 4.0 * seg_w, seg_h);
+
+        let bw = theme.px(80.0);
+        let btn_gap = theme.px(8.0);
         let btn_save = rect_from(win_w - pad - bw, seg_y, bw, seg_h);
         let btn_editor = rect_from(btn_save[0] - btn_gap - bw, seg_y, bw, seg_h);
-        let btn_save_scene = rect_from(btn_editor[0] - btn_gap - theme.px(118.0), seg_y, theme.px(118.0), seg_h);
+        let btn_save_scene = rect_from(btn_editor[0] - btn_gap - theme.px(110.0), seg_y, theme.px(110.0), seg_h);
 
         Self {
             toolbar, navigator, inspector, statusbar, center,
-            editor_tab, editor_body, seg, btn_editor, btn_save, btn_save_scene,
+            editor_tab, editor_body, seg, seg_pill, btn_editor, btn_save, btn_save_scene,
         }
     }
 
@@ -131,6 +133,17 @@ impl Layout {
         let pad = theme.px(14.0);
         let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
         let y = self.center[1] + pad;
+        std::array::from_fn(|i| rect_from(x0 + i as f32 * (w + gap), y, w, h))
+    }
+
+    pub fn tool_button_rects(&self, theme: &Theme) -> [Rect; 3] {
+        let w = theme.px(64.0);
+        let h = theme.px(32.0);
+        let gap = theme.px(6.0);
+        let pad = theme.px(14.0);
+        let row_gap = theme.px(8.0);
+        let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
+        let y = self.center[1] + pad + h + row_gap;
         std::array::from_fn(|i| rect_from(x0 + i as f32 * (w + gap), y, w, h))
     }
 

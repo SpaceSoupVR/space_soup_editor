@@ -23,11 +23,18 @@ pub(crate) fn draw(
 
     let is_file_editor = matches!(editing, Some(EditTarget::SceneFile));
 
-    let seg_labels = ["Player", "First Person", "Edit"];
-    let seg_modes = [ViewMode::PlayerView, ViewMode::FirstPerson, ViewMode::Edit];
-    for i in 0..3 {
+    // Draw the pill background behind all 4 segments (Xcode-style recessed trough)
+    ui.panel(layout.seg_pill, t::CONTROL_ACTIVE);
+
+    let seg_labels = ["Player", "First Person", "Render View", "Edit"];
+    let seg_modes = [ViewMode::PlayerView, ViewMode::FirstPerson, ViewMode::RenderView, ViewMode::Edit];
+    for i in 0..4 {
         let active = *view_mode == seg_modes[i] && editing.is_none();
-        let (bg, fg) = if active { (t::ACCENT, t::TEXT_ON_ACCENT) } else { (t::CONTROL_BG, t::TEXT_PRIMARY) };
+        let (bg, fg) = if active {
+            (t::CONTROL_BG, t::TEXT_PRIMARY)
+        } else {
+            (t::CONTROL_ACTIVE, t::TEXT_SECONDARY)
+        };
         if ui.button_styled(layout.seg[i], seg_labels[i], bg, fg) {
             *view_mode = seg_modes[i];
             if *view_mode == ViewMode::Edit {
@@ -35,6 +42,13 @@ pub(crate) fn draw(
             }
             *editing = None;
         }
+    }
+
+    // Thin vertical separator lines between segments
+    for i in 0..3 {
+        let seg = layout.seg[i];
+        let inset = theme.px(6.0);
+        ui.separator_v(seg[0] + seg[2], seg[1] + inset, seg[3] - inset * 2.0);
     }
 
     let (ed_bg, ed_fg) = if is_file_editor { (t::ACCENT, t::TEXT_ON_ACCENT) } else { (t::CONTROL_BG, t::TEXT_PRIMARY) };

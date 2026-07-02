@@ -3,7 +3,8 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::transform_gizmo::GizmoMode;
 
-use super::super::App;
+use super::super::snap;
+use super::super::{App, EditorTool};
 use super::super::discover::winit_key_to_agate;
 
 pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
@@ -26,6 +27,13 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
                 "w" | "W" => app.xform_gizmo.mode = GizmoMode::Translate,
                 "e" | "E" => app.xform_gizmo.mode = GizmoMode::Rotate,
                 "r" | "R" => app.xform_gizmo.mode = GizmoMode::Scale,
+                "g" | "G" if app.tool == EditorTool::Rigging && app.rig_selection.len() == 1 => {
+                    let id = app.rig_selection[0].clone();
+                    snap::seed_grip_pose(app.runtime.scene_mut(), &id, None);
+                    app.scene_dirty = true;
+                    app.rig_selection.clear();
+                    app.selected_object = Some(id);
+                }
                 _ => {}
             }
         }

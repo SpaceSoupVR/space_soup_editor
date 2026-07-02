@@ -5,7 +5,7 @@ use space_soup::ui2d::Color;
 use crate::transform_gizmo::GizmoMode;
 
 use super::super::layout::Layout;
-use super::super::GizmoPart;
+use super::super::{EditorTool, GizmoPart};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw(
@@ -16,21 +16,64 @@ pub(crate) fn draw(
     dragging_new_model: &Option<std::path::PathBuf>,
     _gizmo_drag: Option<GizmoPart>,
     current_mode: GizmoMode,
-) -> Option<GizmoMode> {
+    current_tool: EditorTool,
+) -> (Option<GizmoMode>, Option<EditorTool>) {
     let mode_rects = layout.mode_button_rects(theme);
     let modes = [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale];
     let mode_labels = ["Move", "Rotate", "Scale"];
+
+    // Draw pill background behind all 3 mode buttons (Xcode-style recessed trough)
+    let first_r = mode_rects[0];
+    let last_r = mode_rects[2];
+    let pill_w = last_r[0] + last_r[2] - first_r[0];
+    let pill_r = [first_r[0], first_r[1], pill_w, first_r[3]];
+    ui.panel(pill_r, t::CONTROL_ACTIVE);
+
     let mut clicked_mode = None;
     for i in 0..3 {
         let active = current_mode == modes[i];
         let (bg, fg) = if active {
-            (t::ACCENT, t::TEXT_ON_ACCENT)
+            (t::CONTROL_BG, t::TEXT_PRIMARY)
         } else {
-            (Color(30, 30, 36, 200), t::TEXT_SECONDARY)
+            (t::CONTROL_ACTIVE, t::TEXT_SECONDARY)
         };
         if ui.button_styled(mode_rects[i], mode_labels[i], bg, fg) {
             clicked_mode = Some(modes[i]);
         }
+    }
+
+    // Thin vertical separator lines between mode buttons
+    for i in 0..2 {
+        let r = mode_rects[i];
+        let inset = theme.px(6.0);
+        ui.separator_v(r[0] + r[2], r[1] + inset, r[3] - inset * 2.0);
+    }
+
+    let tool_rects = layout.tool_button_rects(theme);
+    let tools = [EditorTool::Select, EditorTool::Rigging, EditorTool::Snap];
+    let tool_labels = ["Select", "Rigging", "Snap"];
+
+    let tfirst = tool_rects[0];
+    let tlast = tool_rects[2];
+    let tpill_w = tlast[0] + tlast[2] - tfirst[0];
+    ui.panel([tfirst[0], tfirst[1], tpill_w, tfirst[3]], t::CONTROL_ACTIVE);
+
+    let mut clicked_tool = None;
+    for i in 0..3 {
+        let active = current_tool == tools[i];
+        let (bg, fg) = if active {
+            (t::ACCENT, t::TEXT_ON_ACCENT)
+        } else {
+            (t::CONTROL_ACTIVE, t::TEXT_SECONDARY)
+        };
+        if ui.button_styled(tool_rects[i], tool_labels[i], bg, fg) {
+            clicked_tool = Some(tools[i]);
+        }
+    }
+    for i in 0..2 {
+        let r = tool_rects[i];
+        let inset = theme.px(6.0);
+        ui.separator_v(r[0] + r[2], r[1] + inset, r[3] - inset * 2.0);
     }
 
     let tray = layout.model_tray(theme);
@@ -69,5 +112,5 @@ pub(crate) fn draw(
         }
     }
 
-    clicked_mode
+    (clicked_mode, clicked_tool)
 }

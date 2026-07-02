@@ -23,8 +23,8 @@ pub(crate) fn draw(
     nav_objects_open: &mut bool,
     packet: &DebugPacket,
 ) -> Option<usize> {
-    ui.panel(layout.navigator, t::SURFACE);
-    ui.card_border(layout.navigator);
+    // Flat Xcode-style sidebar — flush fill, no floating card border
+    ui.fill(layout.navigator, t::SIDEBAR_BG);
 
     let nav = layout.navigator;
     let footer_h = theme.px(FOOTER_H);
@@ -61,37 +61,41 @@ pub(crate) fn draw(
                     NavGroup::Scenes => "Scenes",
                     NavGroup::Objects => "Objects",
                 };
-                if ui.list_row_clipped(r, label, false, Some(rows_area)) {
-                    match group {
-                        NavGroup::Scenes => *nav_scenes_open = !open,
-                        NavGroup::Objects => *nav_objects_open = !open,
-                    }
+                // Flat section header: slightly raised SURFACE strip + disclosure chevron
+                ui.fill(r, t::SURFACE);
+                let new_open = ui.disclosure(r, open, label);
+                match group {
+                    NavGroup::Scenes => *nav_scenes_open = new_open,
+                    NavGroup::Objects => *nav_objects_open = new_open,
                 }
             }
             NavRow::SceneFile { file_index } => {
                 let name = files_discovered.get(*file_index)
                     .and_then(|p| p.file_name())
-                    .map(|n| format!("   {}", n.to_string_lossy()))
+                    .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let sel = *selected_file == Some(*file_index) && is_file_editor;
-                if ui.list_row_clipped(r, &name, sel, Some(rows_area)) {
+                // Indent scene file rows by 20px
+                let ir = [r[0] + theme.px(20.0), r[1], r[2] - theme.px(20.0), r[3]];
+                if ui.list_row_clipped(ir, &name, sel, Some(rows_area)) {
                     clicked_nav = Some(*file_index);
                 }
             }
             NavRow::Object { object_id } => {
-                let name = format!("   {object_id}");
                 let sel = selected_object.as_deref() == Some(object_id.as_str()) && editing.is_none();
-                if ui.list_row_clipped(r, &name, sel, Some(rows_area)) {
+                // Indent object rows by 28px (deeper than scene files)
+                let ir = [r[0] + theme.px(28.0), r[1], r[2] - theme.px(28.0), r[3]];
+                if ui.list_row_clipped(ir, object_id, sel, Some(rows_area)) {
                     *editing = None;
                     *selected_object = Some(object_id.clone());
                 }
             }
             NavRow::EmptyHint { group } => {
                 let hint = match group {
-                    NavGroup::Scenes => "   No .json files found",
-                    NavGroup::Objects => "   No objects placed",
+                    NavGroup::Scenes => "No .json files found",
+                    NavGroup::Objects => "No objects placed",
                 };
-                ui.label_styled(r[0] + theme.px(8.0), r[1] + (r[3] - theme.small()) * 0.5,
+                ui.label_styled(r[0] + theme.px(28.0), r[1] + (r[3] - theme.small()) * 0.5,
                     hint, theme.small(), t::TEXT_DISABLED, r[2], Some(rows_area));
             }
         }
@@ -101,9 +105,8 @@ pub(crate) fn draw(
 
     let nx = nav[0];
     let nw = nav[2];
-    let inset_f = theme.px(8.0);
     let clip_nav = [nx, footer_y, nw, footer_h];
-    ui.separator(nx + inset_f, footer_y, nw - inset_f * 2.0);
+    // No separator — flat Xcode style footer flows directly from the list
     ui.label_styled(nx + theme.px(PAD), footer_y + theme.px(8.0),
         "SCENE", theme.small(), t::TEXT_SECONDARY, nw, None);
     let info = format!(
