@@ -73,7 +73,7 @@ pub(crate) fn grip_root(obj: &GameObject, grip: &GripPoseDef) -> Mat4 {
     obj_mat * offset_mat
 }
 
-pub(crate) fn seed_grip_pose(scene: &mut Scene, object_id: &str, hand_id: Option<&str>) {
+pub(crate) fn seed_grip_pose(scene: &mut Scene, object_id: &str, target_hand: space_soup_engine::Hand, hand_id: Option<&str>) {
     let hand_world = hand_id
         .and_then(|hid| scene.find_object(hid))
         .map(|h| (h.cuboid.position, h.cuboid.rotation));
@@ -90,22 +90,23 @@ pub(crate) fn seed_grip_pose(scene: &mut Scene, object_id: &str, hand_id: Option
         None => ([0.0, 0.0, 0.0], Quat::IDENTITY.to_array()),
     };
 
-    match &mut obj.grip_pose {
+    match obj.grip_pose_mut(target_hand) {
         Some(g) => {
             g.hand_offset_pos = hand_offset_pos;
             g.hand_offset_rot = hand_offset_rot;
         }
-        None => {
-            obj.grip_pose = Some(GripPoseDef {
+        slot => {
+            *slot = Some(GripPoseDef {
                 hand_offset_pos,
                 hand_offset_rot,
+                hand_offset_scale: [1.0, 1.0, 1.0],
                 finger_curl: HashMap::new(),
             });
         }
     }
 }
 
-fn hand_glb_path(hand: space_soup_engine::Hand) -> &'static str {
+pub(crate) fn hand_glb_path(hand: space_soup_engine::Hand) -> &'static str {
     match hand {
         space_soup_engine::Hand::Left  => "models/left_hand.glb",
         space_soup_engine::Hand::Right => "models/right_hand.glb",
@@ -135,8 +136,8 @@ pub(crate) fn update_preview(
         return;
     };
 
-    if scene.find_object(&obj_id).map(|o| o.grip_pose.is_none()).unwrap_or(true) {
-        seed_grip_pose(scene, &obj_id, None);
+    if scene.find_object(&obj_id).map(|o| o.grip_pose(snap_hand).is_none()).unwrap_or(true) {
+        seed_grip_pose(scene, &obj_id, snap_hand, None);
         *scene_dirty = true;
     }
 
@@ -160,7 +161,7 @@ pub(crate) fn update_preview(
         snap_joint_frame.clear();
         return;
     };
-    let Some(grip) = obj.grip_pose.clone() else {
+    let Some(grip) = obj.grip_pose(snap_hand).cloned() else {
         snap_joint_frame.clear();
         return;
     };
@@ -214,8 +215,9 @@ pub(crate) fn apply_gizmo_drag_to_joint(app: &mut App) {
     let dragged = app.xform_gizmo.get_position();
     let t = project_curl(joint.open_pos, joint.closed_pos, dragged);
 
+    let snap_hand = app.snap_hand;
     if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(grip) = &mut obj.grip_pose {
+        if let Some(grip) = obj.grip_pose_mut(snap_hand) {
             grip.finger_curl.insert(joint.name.clone(), t);
             app.scene_dirty = true;
         }
