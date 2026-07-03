@@ -1,8 +1,10 @@
 pub(crate) mod discover;
 pub(crate) mod edit_camera;
+pub(crate) mod grab_pose_editor;
 pub(crate) mod input;
 pub(crate) mod layout;
 pub(crate) mod nav;
+pub(crate) mod orbit_camera;
 pub(crate) mod picking;
 pub(crate) mod render;
 pub(crate) mod scene_bridge;
@@ -141,6 +143,9 @@ pub(crate) struct App {
     pub(crate) snap_hand: Hand,
     pub(crate) snap_selected_joint: Option<usize>,
     pub(crate) snap_joint_frame: Vec<snap::SnapJoint>,
+
+    pub(crate) grab_pose_editor: Option<grab_pose_editor::GrabPoseEditorState>,
+    pub(crate) grab_pose_gizmo: TransformGizmo,
 }
 
 impl App {
@@ -221,6 +226,9 @@ impl App {
             snap_hand: Hand::Right,
             snap_selected_joint: None,
             snap_joint_frame: Vec::new(),
+
+            grab_pose_editor: None,
+            grab_pose_gizmo: TransformGizmo::new(),
         }
     }
 

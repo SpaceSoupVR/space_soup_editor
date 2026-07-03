@@ -1,6 +1,7 @@
 use agate::theme as t;
 use agate::{Theme, Ui};
 use space_soup::ui2d::Color;
+use space_soup_engine::Hand;
 
 use crate::transform_gizmo::GizmoMode;
 
@@ -17,7 +18,8 @@ pub(crate) fn draw(
     _gizmo_drag: Option<GizmoPart>,
     current_mode: GizmoMode,
     current_tool: EditorTool,
-) -> (Option<GizmoMode>, Option<EditorTool>) {
+    current_hand: Hand,
+) -> (Option<GizmoMode>, Option<EditorTool>, Option<Hand>) {
     let mode_rects = layout.mode_button_rects(theme);
     let modes = [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale];
     let mode_labels = ["Move", "Rotate", "Scale"];
@@ -76,6 +78,27 @@ pub(crate) fn draw(
         ui.separator_v(r[0] + r[2], r[1] + inset, r[3] - inset * 2.0);
     }
 
+    let mut clicked_hand = None;
+    if current_tool == EditorTool::Rigging || current_tool == EditorTool::Snap {
+        let hand_rects = layout.hand_toggle_rects(theme);
+        let hands = [Hand::Left, Hand::Right];
+        let hand_labels = ["L", "R"];
+        let hfirst = hand_rects[0];
+        let hlast = hand_rects[1];
+        ui.panel([hfirst[0], hfirst[1], hlast[0] + hlast[2] - hfirst[0], hfirst[3]], t::CONTROL_ACTIVE);
+        for i in 0..2 {
+            let active = current_hand == hands[i];
+            let (bg, fg) = if active {
+                (t::ACCENT, t::TEXT_ON_ACCENT)
+            } else {
+                (t::CONTROL_ACTIVE, t::TEXT_SECONDARY)
+            };
+            if ui.button_styled(hand_rects[i], hand_labels[i], bg, fg) {
+                clicked_hand = Some(hands[i]);
+            }
+        }
+    }
+
     let tray = layout.model_tray(theme);
     ui.panel_bordered(tray, Color(20, 20, 24, 230));
 
@@ -111,5 +134,5 @@ pub(crate) fn draw(
         }
     }
 
-    (clicked_mode, clicked_tool)
+    (clicked_mode, clicked_tool, clicked_hand)
 }

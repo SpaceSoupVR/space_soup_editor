@@ -6,6 +6,7 @@ use agate::{AMouseButton, Theme};
 
 use crate::transform_gizmo::GizmoMode;
 
+use super::super::grab_pose_editor;
 use super::super::layout::{in_rect, Layout};
 use super::super::picking::ray_plane_intersect;
 use super::super::render::scene::GIZMO_ANCHOR_MARGIN;
@@ -26,6 +27,12 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     let dy = new.1 - app.last_mouse_pos.1;
     app.last_mouse_pos = new;
     app.mouse_pos = new;
+
+    if app.grab_pose_editor.is_some() {
+        grab_pose_cursor_moved(app, new, dx, dy);
+        return;
+    }
+
     let mouse_vec2 = Vec2::new(new.0, new.1);
     let viewport = app.win_size();
 
@@ -154,7 +161,101 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
     app.scene_dirty = true;
 }
 
+/// Cursor handling for the Grab Pose Editor's isolated viewport — hovers/
+/// drags `app.grab_pose_gizmo` when not in Live Grab Preview mode, or spins
+/// the previewed object (`grab_pose_editor::preview_drag`) when it is;
+/// otherwise a plain click-drag orbits `state.orbit` (there's exactly one
+/// object in this view, so there's no picking to do).
+fn grab_pose_cursor_moved(app: &mut App, new: (f32, f32), dx: f32, dy: f32) {
+    let mouse_vec2 = Vec2::new(new.0, new.1);
+    let viewport = app.win_size();
+    let (win_w, win_h) = viewport;
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+    let over_viewport = in_rect(new, layout.grab_pose_viewport()) && !in_rect(new, layout.inspector);
+    let preview_mode = app.grab_pose_editor.as_ref().map(|s| s.preview_mode).unwrap_or(false);
+
+    if !preview_mode && !app.gizmo_dragging && over_viewport {
+        app.grab_pose_gizmo.hovered_axis = app.grab_pose_gizmo.raycast_gizmo(mouse_vec2, &app.camera, viewport);
+    } else {
+        app.grab_pose_gizmo.hovered_axis = None;
+    }
+
+    if app.left_down {
+        if app.gizmo_dragging {
+            app.grab_pose_gizmo.drag(mouse_vec2, &app.camera, viewport);
+            grab_pose_editor::apply_gizmo_drag(app);
+            app.dragged = true;
+        } else if preview_mode {
+            if !app.press_in_chrome {
+                grab_pose_editor::preview_drag(app, dx, dy);
+                app.dragged = true;
+            }
+        } else if !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
+            app.dragged = true;
+            if let Some(state) = app.grab_pose_editor.as_mut() {
+                state.orbit.orbit(dx, dy);
+            }
+        }
+    }
+
+    app.redraw_now();
+}
+
+/// Mirrors `left_button` for the isolated Grab Pose Editor viewport: press
+/// either begins a gizmo drag (with an undo snapshot) or starts an orbit
+/// drag; release commits the gizmo drag if one was in progress.
+fn grab_pose_left_button(app: &mut App, state: ElementState) {
+    let (win_w, win_h) = app.win_size();
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+    let mp = app.mouse_pos;
+
+    match state {
+        ElementState::Pressed => {
+            app.left_down = true;
+            app.dragged = false;
+            app.gizmo_drag = None;
+            app.gizmo_dragging = false;
+            app.mouse_pressed.push(AMouseButton::Left);
+            app.mouse_held.push(AMouseButton::Left);
+
+            app.press_in_chrome = !in_rect(mp, layout.grab_pose_viewport())
+                || in_rect(mp, layout.inspector)
+                || in_rect(mp, layout.editor_tab);
+
+            let preview_mode = app.grab_pose_editor.as_ref().map(|s| s.preview_mode).unwrap_or(false);
+            if !app.press_in_chrome && !preview_mode {
+                let mp2 = Vec2::new(mp.0, mp.1);
+                if let Some(axis) = app.grab_pose_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h)) {
+                    grab_pose_editor::begin_drag_snapshot(app);
+                    app.grab_pose_gizmo.begin_drag(axis, mp2, &app.camera, (win_w, win_h));
+                    app.gizmo_dragging = true;
+                    app.dragged = true;
+                }
+            }
+        }
+        ElementState::Released => {
+            app.left_down = false;
+            if app.gizmo_dragging {
+                app.grab_pose_gizmo.end_drag();
+                app.gizmo_dragging = false;
+                grab_pose_editor::end_drag_commit(app);
+            }
+            app.mouse_released.push(AMouseButton::Left);
+            app.dragged = false;
+        }
+        _ => {}
+    }
+    app.redraw_now();
+}
+
 pub(crate) fn left_button(app: &mut App, state: ElementState) {
+    if app.grab_pose_editor.is_some() {
+        grab_pose_left_button(app, state);
+        return;
+    }
+
     let (win_w, win_h) = app.win_size();
     let theme = Theme::new(app.scale);
     let layout = Layout::new(win_w, win_h, &theme);
@@ -233,7 +334,7 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                                         if app.rig_selection.len() == 2 {
                                             let object = app.rig_selection[0].clone();
                                             let hand = app.rig_selection[1].clone();
-                                            snap::seed_grip_pose(app.runtime.scene_mut(), &object, Some(&hand));
+                                            snap::seed_grip_pose(app.runtime.scene_mut(), &object, app.snap_hand, Some(&hand));
                                             app.scene_dirty = true;
                                             app.rig_selection.clear();
                                             app.selected_object = Some(object);

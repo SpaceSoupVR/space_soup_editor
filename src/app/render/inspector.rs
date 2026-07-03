@@ -23,6 +23,7 @@ pub(crate) fn draw(
     selected_object: &mut Option<String>,
     scene_dirty: &mut bool,
     open_script_editor: &mut Option<String>,
+    open_grab_pose_editor: &mut Option<String>,
     _packet: &space_soup_engine::DebugPacket,
 ) {
     ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
@@ -49,7 +50,7 @@ pub(crate) fn draw(
     match sel_id {
         Some(id) => draw_object_cards(
             ui, theme, layout, ix, iw, body_top, clip_ins,
-            scene, game_dir, &id, selected_object, scene_dirty, open_script_editor,
+            scene, game_dir, &id, selected_object, scene_dirty, open_script_editor, open_grab_pose_editor,
         ),
         None => {
             ui.label_styled(ix + theme.px(PAD), body_top,
@@ -88,6 +89,7 @@ fn draw_object_cards(
     scene: &mut Scene, game_dir: &std::path::Path, id: &str,
     selected_object: &mut Option<String>, scene_dirty: &mut bool,
     open_script_editor: &mut Option<String>,
+    open_grab_pose_editor: &mut Option<String>,
 ) {
     let cards = layout.inspector_cards(theme, body_top);
 
@@ -207,6 +209,10 @@ fn draw_object_cards(
             }
         }
         *open_script_editor = Some(id.to_string());
+    }
+
+    if ui.button_secondary(cards.btn_grab_pose, "Edit Grab Pose") {
+        *open_grab_pose_editor = Some(id.to_string());
     }
 
     if ui.button_secondary(cards.btn_dup, "Duplicate") {

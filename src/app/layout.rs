@@ -93,6 +93,14 @@ impl Layout {
         }
     }
 
+    /// Widens `center` to also cover where the navigator normally sits —
+    /// used by the Grab Pose Editor's isolated viewport, which hides the
+    /// object list (nothing else in the scene is shown while it's open) in
+    /// favor of a larger 3D view.
+    pub fn grab_pose_viewport(&self) -> Rect {
+        rect_from(self.navigator[0], self.center[1], self.center[0] + self.center[2] - self.navigator[0], self.center[3])
+    }
+
     pub fn nav_row(&self, theme: &Theme, i: usize) -> Rect {
         let row_h = theme.px(ROW_H);
         let top_pad = theme.px(10.0);
@@ -156,6 +164,17 @@ impl Layout {
         std::array::from_fn(|i| rect_from(x0 + i as f32 * (w + gap), y, w, h))
     }
 
+    /// Small "L"/"R" pill next to the tool buttons — the target hand for the
+    /// Rigging/Snap tools' grip-pose seeding and preview.
+    pub fn hand_toggle_rects(&self, theme: &Theme) -> [Rect; 2] {
+        let tools = self.tool_button_rects(theme);
+        let w = theme.px(32.0);
+        let h = tools[2][3];
+        let gap = theme.px(6.0);
+        let x0 = tools[2][0] + tools[2][2] + theme.px(16.0);
+        std::array::from_fn(|i| rect_from(x0 + i as f32 * (w + gap), tools[2][1], w, h))
+    }
+
     pub fn inspector_cards(&self, theme: &Theme, top_y: f32) -> InspectorCards {
         let ix = self.inspector[0];
         let iw = self.inspector[2];
@@ -199,7 +218,10 @@ impl Layout {
         let script_y = voxelize_y + theme.px(30.0) + cg;
         let btn_script = rect_from(cx, script_y, cw, theme.px(30.0));
 
-        let act_y = script_y + theme.px(30.0) + cg;
+        let grab_pose_y = script_y + theme.px(30.0) + cg;
+        let btn_grab_pose = rect_from(cx, grab_pose_y, cw, theme.px(30.0));
+
+        let act_y = grab_pose_y + theme.px(30.0) + cg;
         let bw = (cw - theme.px(8.0)) * 0.5;
         let btn_dup = rect_from(cx, act_y, bw, theme.px(30.0));
         let btn_del = rect_from(cx + bw + theme.px(8.0), act_y, bw, theme.px(30.0));
@@ -212,6 +234,7 @@ impl Layout {
             col_card, col_row,
             btn_voxelize,
             btn_script,
+            btn_grab_pose,
             btn_dup, btn_del,
             bottom_y: act_y + theme.px(30.0),
         }
@@ -226,6 +249,7 @@ pub(crate) struct InspectorCards {
     pub col_card: Rect, pub col_row: Rect,
     pub btn_voxelize: Rect,
     pub btn_script: Rect,
+    pub btn_grab_pose: Rect,
     pub btn_dup: Rect, pub btn_del: Rect,
     pub bottom_y: f32,
 }
