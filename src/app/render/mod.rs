@@ -1,3 +1,4 @@
+pub(crate) mod grab_pose_panel;
 pub(crate) mod inspector;
 pub(crate) mod navigator;
 pub(crate) mod scene;
@@ -15,12 +16,18 @@ use space_soup_engine::{InputFrame, LocomotionInput, PlayerRig};
 
 use agate::Theme;
 
+use super::grab_pose_editor;
 use super::layout::Layout;
 use super::snap;
 use super::{EditorTool, EditTarget, ViewMode};
 
 impl super::App {
     pub(crate) fn redraw(&mut self) {
+        if self.grab_pose_editor.is_some() {
+            self.redraw_grab_pose();
+            return;
+        }
+
         let (win_w, win_h) = self.win_size();
         let nav_rows = self.nav_rows();
 
@@ -252,9 +259,9 @@ impl super::App {
                 }
             }
         } else if self.view_mode == ViewMode::Edit {
-            let (new_mode, new_tool) = viewport_overlay::draw(
+            let (new_mode, new_tool, new_hand) = viewport_overlay::draw(
                 ui, &theme, &layout, &self.available_models, &self.dragging_new_model,
-                self.gizmo_drag, self.xform_gizmo.mode, self.tool,
+                self.gizmo_drag, self.xform_gizmo.mode, self.tool, self.snap_hand,
             );
             if let Some(new_mode) = new_mode {
                 self.xform_gizmo.mode = new_mode;
@@ -266,15 +273,19 @@ impl super::App {
                     self.tool = new_tool;
                 }
             }
+            if let Some(new_hand) = new_hand {
+                self.snap_hand = new_hand;
+            }
         }
 
         let mut scene_dirty = self.scene_dirty;
         let mut open_script_editor: Option<String> = None;
+        let mut open_grab_pose_editor: Option<String> = None;
         let game_dir_for_inspector = self.runtime.game_dir().to_path_buf();
         inspector::draw(
             ui, &theme, &layout, &self.editing, &self.editor,
             self.runtime.scene_mut(), &game_dir_for_inspector, &mut self.selected_object, &mut scene_dirty,
-            &mut open_script_editor, &packet,
+            &mut open_script_editor, &mut open_grab_pose_editor, &packet,
         );
         self.scene_dirty = scene_dirty;
 
@@ -316,8 +327,121 @@ impl super::App {
         frame.present();
 
         if let Some(fi) = clicked_nav { self.open_file(fi); }
+        if let Some(id) = open_grab_pose_editor { grab_pose_editor::open(self, id); }
 
         self.mouse_held = if self.left_down { vec![agate::AMouseButton::Left] } else { vec![] };
+    }
+
+    /// Redraw path for the Interactive VR Grab Pose Editor — an isolated
+    /// mode swapped in wholesale in place of the normal scene render/UI
+    /// (see `grab_pose_editor.rs`'s module doc for why: no multi-window
+    /// support anywhere in this stack, so "dedicated editor" means "a
+    /// different thing drawn into the one existing viewport").
+    fn redraw_grab_pose(&mut self) {
+        let (win_w, win_h) = self.win_size();
+
+        // Must run before the `renderer`/`surface`/`overlay`/`ui` reborrows
+        // below — it takes `&mut App` (whole-struct) like the mouse/keyboard
+        // handlers do, which would conflict with those field-scoped
+        // borrows if it ran any later here.
+        grab_pose_editor::sync_gizmo(self);
+
+        let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
+            self.renderer.as_mut(), self.surface.as_ref(),
+            self.overlay.as_mut(), self.ui.as_mut(),
+        ) else { return };
+
+        let now = Instant::now();
+        self.last_tick = now;
+
+        let game_dir = self.runtime.game_dir().to_path_buf();
+        grab_pose_editor::ensure_hand_meshes_loaded(renderer, &mut self.mesh_cache, &game_dir);
+
+        let object_id = self.grab_pose_editor.as_ref().map(|s| s.object_id.clone());
+        let object_mesh_path = object_id.as_ref()
+            .and_then(|id| self.runtime.scene().find_object(id))
+            .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
+        if let Some(path) = &object_mesh_path {
+            if !self.mesh_cache.contains_key(path) {
+                let full_path = game_dir.join(path);
+                match GltfMesh::load(&renderer.device, &renderer.queue, renderer.mesh_texture_layout(), &full_path) {
+                    Ok(mesh) => {
+                        let model_uniform = renderer.create_model_uniform();
+                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
+                    }
+                    Err(e) => log::warn!("space_soup_editor: grab pose editor failed to load '{path}': {e}"),
+                }
+            }
+        }
+
+        let Some(state) = self.grab_pose_editor.as_ref() else { return };
+        self.camera.position = state.orbit.eye_position();
+        self.camera.rotation = state.orbit.rotation();
+        let preview_mode = state.preview_mode;
+
+        grab_pose_editor::update_transforms(state, self.runtime.scene(), &mut self.mesh_cache);
+        let cuboids = grab_pose_editor::collect_cuboids(state, self.runtime.scene());
+        let mut mesh_instances = grab_pose_editor::collect_mesh_instances(state, self.runtime.scene(), &self.mesh_cache);
+
+        if !preview_mode {
+            if let Some(assets) = self.gizmo_assets.as_mut() {
+                mesh_instances.extend(self.grab_pose_gizmo.collect_mesh_instances(assets, &self.camera, (win_w, win_h)));
+            }
+        }
+
+        let frame = match surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => { log::warn!("surface error: {e}"); return; }
+        };
+        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+
+        renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
+
+        let ui_input = agate::UiInput {
+            mouse_pos: self.mouse_pos,
+            mouse_held: std::mem::take(&mut self.mouse_held),
+            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
+            mouse_released: std::mem::take(&mut self.mouse_released),
+            scroll_y: std::mem::take(&mut self.scroll_y),
+            text: std::mem::take(&mut self.text_input),
+            keys: std::mem::take(&mut self.named_keys),
+            cmd: self.mods.super_key() || self.mods.control_key(),
+            shift: self.mods.shift_key(),
+            alt: self.mods.alt_key(),
+            dt: 0.0,
+        };
+        ui.begin_frame(win_w, win_h, &ui_input);
+
+        let theme: Theme = ui.theme;
+        let layout = Layout::new(win_w, win_h, &theme);
+        ui.card_border(layout.grab_pose_viewport());
+
+        let scene_ref = self.runtime.scene();
+        let Some(state) = self.grab_pose_editor.as_mut() else { return };
+        let actions = grab_pose_panel::draw(ui, &theme, &layout, state, &mut self.grab_pose_gizmo, scene_ref);
+
+        overlay.set_items(ui.finish());
+
+        let mut encoder = renderer.device.create_command_encoder(
+            &CommandEncoderDescriptor { label: Some("overlay_enc") });
+        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
+        renderer.queue.submit(Some(encoder.finish()));
+        frame.present();
+
+        self.mouse_held = if self.left_down { vec![agate::AMouseButton::Left] } else { vec![] };
+
+        if actions.close { grab_pose_editor::close(self); }
+        if actions.reset { grab_pose_editor::reset_active_point(self); }
+        if actions.undo { grab_pose_editor::undo(self); }
+        if actions.redo { grab_pose_editor::redo(self); }
+        if let Some((field, value)) = actions.field_edit {
+            grab_pose_editor::apply_field_edit(self, field, value);
+        }
+        if let Some(i) = actions.select_point { grab_pose_editor::select_point(self, i); }
+        if actions.add_point { grab_pose_editor::add_point(self); }
+        if actions.delete_point { grab_pose_editor::delete_active_point(self); }
+        if let Some(name) = actions.rename_point { grab_pose_editor::rename_active_point(self, name); }
+        if let Some(kind) = actions.set_kind { grab_pose_editor::set_active_point_kind(self, kind); }
     }
 }
 

@@ -5,9 +5,16 @@ use super::super::{App, ViewMode};
 use agate::Theme;
 
 pub(crate) fn pinch(app: &mut App, delta: f64, phase: TouchPhase) {
-    if app.view_mode == ViewMode::Edit && app.editing.is_none() && phase != TouchPhase::Cancelled
-        && over_viewport(app)
-    {
+    if phase == TouchPhase::Cancelled { return; }
+
+    if app.grab_pose_editor.is_some() {
+        if over_grab_pose_viewport(app) {
+            if let Some(state) = app.grab_pose_editor.as_mut() {
+                state.orbit.zoom(delta as f32 * -0.8);
+            }
+            app.redraw_now();
+        }
+    } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_viewport(app) {
         app.edit_camera.dolly(delta as f32 * 0.8);
         app.redraw_now();
     }
@@ -23,7 +30,18 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
     // must keep flowing even when the camera itself shouldn't move.
     app.scroll_y += dy * 0.05;
 
-    if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
+    if app.grab_pose_editor.is_some() {
+        if over_grab_pose_viewport(app) {
+            let cmd = app.mods.super_key() || app.mods.control_key();
+            if let Some(state) = app.grab_pose_editor.as_mut() {
+                if cmd {
+                    state.orbit.zoom(-dy * 0.002);
+                } else {
+                    state.orbit.pan(dx, dy);
+                }
+            }
+        }
+    } else if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
         if app.mods.super_key() || app.mods.control_key() {
             app.edit_camera.dolly(-dy * 0.002);
         } else {
@@ -40,4 +58,11 @@ fn over_viewport(app: &App) -> bool {
     in_rect(app.mouse_pos, layout.center)
         && !in_rect(app.mouse_pos, layout.navigator)
         && !in_rect(app.mouse_pos, layout.inspector)
+}
+
+fn over_grab_pose_viewport(app: &App) -> bool {
+    let (win_w, win_h) = app.win_size();
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+    in_rect(app.mouse_pos, layout.grab_pose_viewport()) && !in_rect(app.mouse_pos, layout.inspector)
 }

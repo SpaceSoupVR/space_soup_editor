@@ -32,7 +32,11 @@ pub(crate) fn new_object(id: String, pos: Vec3, half: Vec3, mesh_path: Option<St
         script: None,
         animations: Vec::new(),
         rig_attachment: None,
-        grip_pose: None,
+        grip_pose_legacy: None,
+        grip_pose_left: None,
+        grip_pose_right: None,
+        rigid_body: None,
+        grip_points: Vec::new(),
     }
 }
 
