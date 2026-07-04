@@ -91,9 +91,13 @@ pub(crate) fn draw(
         actions.add_point = true;
     }
     let can_delete = points.len() > 1;
-    let (dbg, dfg) = if can_delete { (t::CONTROL_BG, t::TEXT_PRIMARY) } else { (t::CONTROL_ACTIVE, t::TEXT_DISABLED) };
-    if ui.button_styled([cx + bw + theme.px(8.0), y, bw, theme.px(26.0)], "Delete", dbg, dfg) && can_delete {
-        actions.delete_point = true;
+    let del_r = [cx + bw + theme.px(8.0), y, bw, theme.px(26.0)];
+    if can_delete {
+        if ui.button_styled(del_r, "Delete", t::CONTROL_BG, t::TEXT_PRIMARY) {
+            actions.delete_point = true;
+        }
+    } else {
+        ui.button_disabled(del_r, "Delete", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
     }
     y += theme.px(26.0) + gap;
 
@@ -244,15 +248,23 @@ pub(crate) fn draw(
     if ui.button_secondary([cx, y, bw, bh], "Reset") { actions.reset = true; }
 
     let can_undo = state.can_undo();
-    let (ubg, ufg) = if can_undo { (t::CONTROL_BG, t::TEXT_PRIMARY) } else { (t::CONTROL_ACTIVE, t::TEXT_DISABLED) };
-    if ui.button_styled([cx + bw + theme.px(8.0), y, bw, bh], "Undo", ubg, ufg) && can_undo {
-        actions.undo = true;
+    let undo_r = [cx + bw + theme.px(8.0), y, bw, bh];
+    if can_undo {
+        if ui.button_styled(undo_r, "Undo", t::CONTROL_BG, t::TEXT_PRIMARY) {
+            actions.undo = true;
+        }
+    } else {
+        ui.button_disabled(undo_r, "Undo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
     }
 
     let can_redo = state.can_redo();
-    let (rbg, rfg) = if can_redo { (t::CONTROL_BG, t::TEXT_PRIMARY) } else { (t::CONTROL_ACTIVE, t::TEXT_DISABLED) };
-    if ui.button_styled([cx + (bw + theme.px(8.0)) * 2.0, y, bw, bh], "Redo", rbg, rfg) && can_redo {
-        actions.redo = true;
+    let redo_r = [cx + (bw + theme.px(8.0)) * 2.0, y, bw, bh];
+    if can_redo {
+        if ui.button_styled(redo_r, "Redo", t::CONTROL_BG, t::TEXT_PRIMARY) {
+            actions.redo = true;
+        }
+    } else {
+        ui.button_disabled(redo_r, "Redo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
     }
 
     actions

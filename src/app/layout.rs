@@ -101,37 +101,78 @@ impl Layout {
         rect_from(self.navigator[0], self.center[1], self.center[0] + self.center[2] - self.navigator[0], self.center[3])
     }
 
-    pub fn nav_row(&self, theme: &Theme, i: usize) -> Rect {
-        let row_h = theme.px(ROW_H);
-        let top_pad = theme.px(10.0);
-        let inset = theme.px(8.0);
-        rect_from(
-            self.navigator[0] + inset,
-            self.navigator[1] + top_pad + i as f32 * row_h,
-            self.navigator[2] - inset * 2.0,
-            row_h,
-        )
-    }
+    /// Fixed on-screen height of the model tray. Kept as a named constant
+    /// (rather than inlined) so `mouse.rs`'s "is the cursor above the tray"
+    /// check and the tray's own layout can't drift apart.
+    pub const MODEL_TRAY_H: f32 = 120.0;
+    const MODEL_LIST_TOP_PAD: f32 = 26.0;
+    const MODEL_CHIP_W: f32 = 110.0;
+    const MODEL_CHIP_H: f32 = 40.0;
+    const MODEL_CHIP_GAP: f32 = 12.0;
+    const MODEL_PAD_X: f32 = 12.0;
 
     pub fn model_tray(&self, theme: &Theme) -> Rect {
         let gap = theme.px(PANEL_GAP);
-        let bar_h = theme.px(72.0);
+        let bar_h = theme.px(Self::MODEL_TRAY_H);
         let x = self.navigator[0] + self.navigator[2] + gap;
         let w = (self.inspector[0] - x - gap).max(0.0);
         let y = self.center[1] + self.center[3] - bar_h - gap;
         rect_from(x, y, w, bar_h)
     }
 
-    pub fn model_rects(&self, theme: &Theme, count: usize) -> Vec<Rect> {
+    /// Scrollable region of the tray, below the fixed "Drag a model into the
+    /// scene" label row.
+    pub fn model_list_area(&self, theme: &Theme) -> Rect {
         let tray = self.model_tray(theme);
-        let mw = theme.px(110.0);
-        let mh = theme.px(40.0);
-        let gap = theme.px(12.0);
-        let n = count.max(1);
-        let total = count as f32 * mw + (n - 1) as f32 * gap;
-        let start = tray[0] + (tray[2] - total) * 0.5;
-        let y = tray[1] + (tray[3] - mh) * 0.5;
-        (0..count).map(|i| rect_from(start + i as f32 * (mw + gap), y, mw, mh)).collect()
+        let top_pad = theme.px(Self::MODEL_LIST_TOP_PAD);
+        rect_from(tray[0], tray[1] + top_pad, tray[2], (tray[3] - top_pad - theme.px(8.0)).max(0.0))
+    }
+
+    /// How many model chips fit per row given the tray's current width.
+    pub fn model_columns(&self, theme: &Theme) -> usize {
+        let tray = self.model_tray(theme);
+        let mw = theme.px(Self::MODEL_CHIP_W);
+        let gap = theme.px(Self::MODEL_CHIP_GAP);
+        let pad_x = theme.px(Self::MODEL_PAD_X);
+        let usable = (tray[2] - pad_x * 2.0 + gap).max(mw);
+        ((usable / (mw + gap)).floor() as usize).max(1)
+    }
+
+    /// Left-aligned grid of model chips, wrapping to further rows once the
+    /// tray runs out of horizontal room. `scroll_y` (in pixels, clamped by
+    /// the caller via `model_max_scroll`) shifts every row up so the grid can
+    /// be scrolled instead of overflowing the tray when there are more
+    /// models than fit on screen at once.
+    pub fn model_rects(&self, theme: &Theme, count: usize, scroll_y: f32) -> Vec<Rect> {
+        let tray = self.model_tray(theme);
+        let list = self.model_list_area(theme);
+        let mw = theme.px(Self::MODEL_CHIP_W);
+        let mh = theme.px(Self::MODEL_CHIP_H);
+        let gap = theme.px(Self::MODEL_CHIP_GAP);
+        let pad_x = theme.px(Self::MODEL_PAD_X);
+        let cols = self.model_columns(theme);
+        (0..count).map(|i| {
+            let col = i % cols;
+            let row = i / cols;
+            let x = tray[0] + pad_x + col as f32 * (mw + gap);
+            let y = list[1] + row as f32 * (mh + gap) - scroll_y;
+            rect_from(x, y, mw, mh)
+        }).collect()
+    }
+
+    /// Total (unscrolled) height of the model grid content, used to compute
+    /// how far `model_rects`' `scroll_y` is allowed to go.
+    pub fn model_content_height(&self, theme: &Theme, count: usize) -> f32 {
+        let cols = self.model_columns(theme);
+        let rows = count.max(1).div_ceil(cols) as f32;
+        let mh = theme.px(Self::MODEL_CHIP_H);
+        let gap = theme.px(Self::MODEL_CHIP_GAP);
+        rows * mh + (rows - 1.0).max(0.0) * gap
+    }
+
+    pub fn model_max_scroll(&self, theme: &Theme, count: usize) -> f32 {
+        let list = self.model_list_area(theme);
+        (self.model_content_height(theme, count) - list[3]).max(0.0)
     }
 
     pub fn gizmo_rects(&self, theme: &Theme) -> [Rect; 3] {

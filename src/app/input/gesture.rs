@@ -41,6 +41,12 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
                 }
             }
         }
+    } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_model_tray(app) {
+        let (win_w, win_h) = app.win_size();
+        let theme = Theme::new(app.scale);
+        let layout = Layout::new(win_w, win_h, &theme);
+        let max_scroll = layout.model_max_scroll(&theme, app.available_models.len());
+        app.model_scroll_y = (app.model_scroll_y + dy).clamp(0.0, max_scroll);
     } else if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
         if app.mods.super_key() || app.mods.control_key() {
             app.edit_camera.dolly(-dy * 0.002);
@@ -49,6 +55,13 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
         }
     }
     app.redraw_now();
+}
+
+fn over_model_tray(app: &App) -> bool {
+    let (win_w, win_h) = app.win_size();
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+    in_rect(app.mouse_pos, layout.model_tray(&theme))
 }
 
 fn over_viewport(app: &App) -> bool {

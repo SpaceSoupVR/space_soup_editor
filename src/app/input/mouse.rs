@@ -4,7 +4,7 @@ use winit::event::ElementState;
 
 use agate::{AMouseButton, Theme};
 
-use crate::transform_gizmo::GizmoMode;
+use crate::transform_gizmo::{Axis, GizmoMode};
 
 use super::super::grab_pose_editor;
 use super::super::layout::{in_rect, Layout};
@@ -94,8 +94,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
 
     if app.dragging_new_model.is_some() {
         let (o, d) = app.screen_ray(new.0, new.1, win_w, win_h);
-        let in_center = over_viewport
-            && new.1 < layout.center[1] + layout.center[3] - theme.px(72.0);
+        let in_center = over_viewport && new.1 < layout.model_tray(&theme)[1];
         app.ghost_preview = if in_center { ray_plane_intersect(o, d, 0.0) } else { None };
     }
 
@@ -245,7 +244,6 @@ fn grab_pose_left_button(app: &mut App, state: ElementState) {
             app.mouse_released.push(AMouseButton::Left);
             app.dragged = false;
         }
-        _ => {}
     }
     app.redraw_now();
 }
@@ -279,8 +277,10 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
             if app.view_mode == ViewMode::Edit && app.editing.is_none() {
                 let mp2 = Vec2::new(mp.0, mp.1);
 
-                let model_rects = layout.model_rects(&theme, app.available_models.len());
-                let clicked_chip = model_rects.iter().position(|r| in_rect(mp, *r));
+                let model_list_area = layout.model_list_area(&theme);
+                let model_rects = layout.model_rects(&theme, app.available_models.len(), app.model_scroll_y);
+                let clicked_chip = model_rects.iter()
+                    .position(|r| in_rect(mp, *r) && in_rect(mp, model_list_area));
 
                 if let Some(i) = clicked_chip {
                     app.dragging_new_model = Some(app.available_models[i].clone());
@@ -318,6 +318,14 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                         app.snap_selected_joint = Some(idx);
                         if let Some(joint) = app.snap_joint_frame.get(idx) {
                             app.xform_gizmo.set_position(joint.current_pos);
+                            // Grabbing the marker itself (rather than a
+                            // rendered gizmo axis) has no single axis to
+                            // constrain to, so drag it freely in the
+                            // camera-facing plane; `apply_gizmo_drag_to_joint`
+                            // projects the result back onto the finger's
+                            // open->closed curl segment regardless.
+                            app.xform_gizmo.begin_drag(Axis::XYZ, mp2, &app.camera, (win_w, win_h));
+                            app.gizmo_dragging = true;
                         }
                         app.dragged = true;
                     } else if let Some((i, _)) = gizmo.iter().enumerate().find(|(_, r)| in_rect(mp, **r)) {
@@ -404,7 +412,6 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
             }
             app.dragged = false;
         }
-        _ => {}
     }
     app.redraw_now();
 }

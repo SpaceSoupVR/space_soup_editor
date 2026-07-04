@@ -261,6 +261,7 @@ impl super::App {
         } else if self.view_mode == ViewMode::Edit {
             let (new_mode, new_tool, new_hand) = viewport_overlay::draw(
                 ui, &theme, &layout, &self.available_models, &self.dragging_new_model,
+                &mut self.model_scroll_y,
                 self.gizmo_drag, self.xform_gizmo.mode, self.tool, self.snap_hand,
             );
             if let Some(new_mode) = new_mode {

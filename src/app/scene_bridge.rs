@@ -54,11 +54,6 @@ pub(crate) fn unique_id(scene: &Scene, base: &str) -> String {
     }
 }
 
-pub(crate) fn read_transform(obj: &GameObject) -> (Vec3, Vec3, Quat, Color3) {
-    let c = &obj.cuboid;
-    (c.position, c.half_size, c.rotation, c.color)
-}
-
 pub(crate) fn save_scene(scene: &Scene, game_dir: &Path, scene_name: &str) -> anyhow::Result<std::path::PathBuf> {
     let path = game_dir.join("scenes").join(format!("{scene_name}.json"));
     scene.save(&path)?;

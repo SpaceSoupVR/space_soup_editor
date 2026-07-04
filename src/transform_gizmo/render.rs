@@ -4,7 +4,7 @@ use space_soup::renderer::{Camera, MeshInstance};
 
 use super::assets::GizmoAssets;
 use super::geometry::all_axes_for;
-use super::math::{billboard_rotation, project_to_screen};
+use super::math::billboard_rotation;
 use super::{Axis, GizmoMode, TransformGizmo};
 
 impl TransformGizmo {

@@ -1,6 +1,5 @@
 use agate::theme as t;
 use agate::{Theme, Ui};
-use space_soup::ui2d::Color;
 use space_soup_engine::Hand;
 
 use crate::transform_gizmo::GizmoMode;
@@ -15,7 +14,8 @@ pub(crate) fn draw(
     layout: &Layout,
     available_models: &[std::path::PathBuf],
     dragging_new_model: &Option<std::path::PathBuf>,
-    _gizmo_drag: Option<GizmoPart>,
+    model_scroll_y: &mut f32,
+    gizmo_drag: Option<GizmoPart>,
     current_mode: GizmoMode,
     current_tool: EditorTool,
     current_hand: Hand,
@@ -31,6 +31,7 @@ pub(crate) fn draw(
     let pill_r = [first_r[0], first_r[1], pill_w, first_r[3]];
     ui.panel(pill_r, t::CONTROL_ACTIVE);
 
+    let mode_tooltips = ["Move (translate)", "Rotate", "Scale"];
     let mut clicked_mode = None;
     for i in 0..3 {
         let active = current_mode == modes[i];
@@ -42,6 +43,7 @@ pub(crate) fn draw(
         if ui.button_styled(mode_rects[i], mode_labels[i], bg, fg) {
             clicked_mode = Some(modes[i]);
         }
+        ui.tooltip(mode_rects[i], mode_tooltips[i]);
     }
 
     // Thin vertical separator lines between mode buttons
@@ -60,6 +62,11 @@ pub(crate) fn draw(
     let tpill_w = tlast[0] + tlast[2] - tfirst[0];
     ui.panel([tfirst[0], tfirst[1], tpill_w, tfirst[3]], t::CONTROL_ACTIVE);
 
+    let tool_tooltips = [
+        "Select and move objects",
+        "Rig hands: pick an object then a hand to attach it to",
+        "Snap: adjust finger-curl grip points",
+    ];
     let mut clicked_tool = None;
     for i in 0..3 {
         let active = current_tool == tools[i];
@@ -71,6 +78,7 @@ pub(crate) fn draw(
         if ui.button_styled(tool_rects[i], tool_labels[i], bg, fg) {
             clicked_tool = Some(tools[i]);
         }
+        ui.tooltip(tool_rects[i], tool_tooltips[i]);
     }
     for i in 0..2 {
         let r = tool_rects[i];
@@ -83,6 +91,7 @@ pub(crate) fn draw(
         let hand_rects = layout.hand_toggle_rects(theme);
         let hands = [Hand::Left, Hand::Right];
         let hand_labels = ["L", "R"];
+        let hand_tooltips = ["Left hand", "Right hand"];
         let hfirst = hand_rects[0];
         let hlast = hand_rects[1];
         ui.panel([hfirst[0], hfirst[1], hlast[0] + hlast[2] - hfirst[0], hfirst[3]], t::CONTROL_ACTIVE);
@@ -96,11 +105,32 @@ pub(crate) fn draw(
             if ui.button_styled(hand_rects[i], hand_labels[i], bg, fg) {
                 clicked_hand = Some(hands[i]);
             }
+            ui.tooltip(hand_rects[i], hand_tooltips[i]);
         }
     }
 
+    // Camera-nav squares (click + drag anywhere on one to orbit/pan/zoom;
+    // `mouse.rs` does the actual hit-testing against these same
+    // `layout.gizmo_rects()` rects). These previously had no visual
+    // representation at all — undiscoverable — so draw them like any other
+    // toggle, highlighting whichever one is actively being dragged.
+    let gizmo_nav_rects = layout.gizmo_rects(theme);
+    let gizmo_nav_parts = [GizmoPart::Orbit, GizmoPart::Pan, GizmoPart::Zoom];
+    let gizmo_nav_labels = ["O", "P", "Z"];
+    let gizmo_nav_tooltips = ["Orbit camera (drag)", "Pan camera (drag)", "Zoom camera (drag)"];
+    for i in 0..3 {
+        let active = gizmo_drag == Some(gizmo_nav_parts[i]);
+        let (bg, fg) = if active {
+            (t::ACCENT, t::TEXT_ON_ACCENT)
+        } else {
+            (t::CONTROL_BG, t::TEXT_SECONDARY)
+        };
+        ui.button_styled(gizmo_nav_rects[i], gizmo_nav_labels[i], bg, fg);
+        ui.tooltip(gizmo_nav_rects[i], gizmo_nav_tooltips[i]);
+    }
+
     let tray = layout.model_tray(theme);
-    ui.panel_bordered(tray, Color(20, 20, 24, 230));
+    ui.panel_bordered(tray, t::SIDEBAR_BG);
 
     let cx = tray[0] + theme.px(12.0);
     let cw = tray[2] - theme.px(24.0);
@@ -117,20 +147,46 @@ pub(crate) fn draw(
             "Drag a model into the scene",
             theme.small(), t::TEXT_SECONDARY, cw, Some(tray),
         );
-        let model_rects = layout.model_rects(theme, available_models.len());
+
+        let list = layout.model_list_area(theme);
+        let max_scroll = layout.model_max_scroll(theme, available_models.len());
+        *model_scroll_y = model_scroll_y.clamp(0.0, max_scroll);
+
+        let model_rects = layout.model_rects(theme, available_models.len(), *model_scroll_y);
         for (i, r) in model_rects.iter().enumerate() {
+            // Skip rows scrolled fully out of the visible list area — pure
+            // performance, correctness is handled by the clip rect below.
+            if r[1] + r[3] < list[1] || r[1] > list[1] + list[3] { continue; }
+
             let path = &available_models[i];
             let label = path.file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("model {i}"));
             let active = dragging_new_model.as_deref() == Some(path.as_path());
-            let bg = if active { t::ACCENT } else { Color(40, 40, 48, 255) };
-            let fg = if active { t::TEXT_ON_ACCENT } else { t::TEXT_PRIMARY };
-            ui.panel(*r, bg);
+            let hovered = ui.is_hovered(*r);
+            let (bg, fg) = if active {
+                (t::ACCENT, t::TEXT_ON_ACCENT)
+            } else if hovered {
+                (t::CONTROL_HOVER, t::TEXT_PRIMARY)
+            } else {
+                (t::CONTROL_BG, t::TEXT_PRIMARY)
+            };
+            ui.panel_clipped(*r, bg, Some(list));
             ui.label_styled(
                 r[0] + theme.px(10.0), r[1] + (r[3] - theme.small()) * 0.5,
-                &label, theme.small(), fg, r[2] - theme.px(20.0), Some(*r),
+                &label, theme.small(), fg, r[2] - theme.px(20.0), Some(list),
             );
+        }
+
+        // Scrollbar hint so it's clear the grid can be scrolled — same
+        // rounded-thumb treatment and color as the navigator's scroll_area.
+        if max_scroll > 0.0 {
+            let track_h = list[3];
+            let thumb_h = (track_h * list[3] / (list[3] + max_scroll)).max(theme.px(24.0));
+            let frac = (*model_scroll_y / max_scroll).clamp(0.0, 1.0);
+            let thumb_y = list[1] + frac * (track_h - thumb_h);
+            let thumb_x = tray[0] + tray[2] - theme.px(8.0);
+            ui.panel([thumb_x, thumb_y, theme.px(4.0), thumb_h], t::SCROLLBAR);
         }
     }
 

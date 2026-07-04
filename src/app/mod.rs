@@ -61,15 +61,6 @@ pub(crate) enum EditTarget {
     ObjectScript(String),
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum DragAxis { X, Y, Z }
-#[derive(Clone, Copy, PartialEq, Eq)]
-#[allow(dead_code)]
-pub(crate) enum DragProp { Position, Size }
-#[allow(dead_code)]
-pub(crate) struct FieldDrag { pub prop: DragProp, pub axis: DragAxis }
-
 pub(crate) struct App {
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) instance: Instance,
@@ -87,6 +78,9 @@ pub(crate) struct App {
     pub(crate) mouse_released: Vec<AMouseButton>,
     pub(crate) mouse_held: Vec<AMouseButton>,
     pub(crate) scroll_y: f32,
+    /// Vertical scroll offset (px) of the "drag a model into the scene"
+    /// tray's grid, for when there are more models than fit at once.
+    pub(crate) model_scroll_y: f32,
     pub(crate) text_input: String,
     pub(crate) named_keys: Vec<agate::input::NamedKey>,
     pub(crate) mods: ModifiersState,
@@ -94,7 +88,6 @@ pub(crate) struct App {
     pub(crate) packet: SharedPacket,
     pub(crate) runtime: GameRuntime,
     pub(crate) last_tick: Instant,
-    pub(crate) start: Instant,
     pub(crate) scale: f32,
 
     pub(crate) mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
@@ -112,7 +105,6 @@ pub(crate) struct App {
     pub(crate) last_clicked_object: Option<String>,
     pub(crate) dragging_new_model: Option<PathBuf>,
     pub(crate) ghost_preview: Option<glam::Vec3>,
-    pub(crate) dragging_field: Option<FieldDrag>,
     pub(crate) gizmo_drag: Option<GizmoPart>,
     pub(crate) press_in_chrome: bool,
     pub(crate) last_mouse_pos: (f32, f32),
@@ -128,8 +120,6 @@ pub(crate) struct App {
     pub(crate) editor: TextEditor,
     pub(crate) editing: Option<EditTarget>,
     pub(crate) editor_focused: bool,
-    pub(crate) editor_drag: bool,
-    pub(crate) files: Vec<PathBuf>,
     pub(crate) selected_file: Option<usize>,
 
     pub(crate) nav_scenes_open: bool,
@@ -171,6 +161,7 @@ impl App {
             mouse_released: Vec::new(),
             mouse_held: Vec::new(),
             scroll_y: 0.0,
+            model_scroll_y: 0.0,
             text_input: String::new(),
             named_keys: Vec::new(),
             mods: ModifiersState::empty(),
@@ -178,7 +169,6 @@ impl App {
             packet,
             runtime,
             last_tick: Instant::now(),
-            start: Instant::now(),
             scale: 1.0,
             mesh_cache: HashMap::new(),
             mesh_base_half_size: HashMap::new(),
@@ -195,7 +185,6 @@ impl App {
             last_clicked_object: None,
             dragging_new_model: None,
             ghost_preview: None,
-            dragging_field: None,
             gizmo_drag: None,
             press_in_chrome: false,
             last_mouse_pos: (0.0, 0.0),
@@ -211,8 +200,6 @@ impl App {
             editor: TextEditor::empty(),
             editing: None,
             editor_focused: false,
-            editor_drag: false,
-            files: files.clone(),
             selected_file: None,
 
             nav_scenes_open: true,
