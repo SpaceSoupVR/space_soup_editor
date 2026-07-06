@@ -28,17 +28,30 @@ pub(crate) fn build_cuboids(
     dragging_new_model: bool,
     ghost_preview: Option<Vec3>,
 ) -> Vec<Cuboid> {
-    let mut cuboids: Vec<Cuboid> = render_cuboids.iter().map(scene_3d::engine_cuboid_to_render).collect();
+    let mut cuboids: Vec<Cuboid> = render_cuboids
+        .iter()
+        .map(scene_3d::engine_cuboid_to_render)
+        .collect();
     cuboids.extend(scene_3d::ground_grid());
     cuboids.extend(scene_3d::build_player_overlay(
-        head_pos, head_rot, &packet.left_hand, &packet.right_hand, to_world,
+        head_pos,
+        head_rot,
+        &packet.left_hand,
+        &packet.right_hand,
+        to_world,
     ));
 
     if is_edit {
         for obj in objects {
-            if obj.hidden { continue; }
+            if obj.hidden {
+                continue;
+            }
             let selected = selected_id == Some(obj.id.as_str());
-            let wire = if selected { Color3(255, 220, 40, 255) } else { Color3(255, 255, 255, 150) };
+            let wire = if selected {
+                Color3(255, 220, 40, 255)
+            } else {
+                Color3(255, 255, 255, 150)
+            };
             if obj.mesh.is_some() {
                 let mut c = Cuboid::wireframe(obj.cuboid.position, obj.cuboid.half_size, wire);
                 c.rotation = obj.cuboid.rotation;
@@ -55,7 +68,8 @@ pub(crate) fn build_cuboids(
         if let Some(pos) = ghost_preview {
             let half = Vec3::splat(0.25);
             cuboids.push(Cuboid::wireframe(
-                Vec3::new(pos.x, half.y, pos.z), half,
+                Vec3::new(pos.x, half.y, pos.z),
+                half,
                 Color3(80, 220, 255, 160),
             ));
         }
@@ -78,8 +92,12 @@ pub(crate) fn sync_gizmo_and_collect<'a>(
     if view_mode != ViewMode::Edit || show_editor {
         return Vec::new();
     }
-    let Some(id) = selected_id else { return Vec::new() };
-    let Some(obj) = objects.iter().find(|o| o.id == id) else { return Vec::new() };
+    let Some(id) = selected_id else {
+        return Vec::new();
+    };
+    let Some(obj) = objects.iter().find(|o| o.id == id) else {
+        return Vec::new();
+    };
 
     xform_gizmo.set_position(gizmo_anchor(obj));
     if !is_dragging {
@@ -87,6 +105,8 @@ pub(crate) fn sync_gizmo_and_collect<'a>(
         xform_gizmo.set_scale(obj.cuboid.half_size);
     }
 
-    let Some(assets) = gizmo_assets.as_mut() else { return Vec::new() };
+    let Some(assets) = gizmo_assets.as_mut() else {
+        return Vec::new();
+    };
     xform_gizmo.collect_mesh_instances(assets, camera, viewport)
 }

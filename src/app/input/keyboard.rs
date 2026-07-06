@@ -3,10 +3,10 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::transform_gizmo::GizmoMode;
 
+use super::super::discover::winit_key_to_agate;
 use super::super::grab_pose_editor;
 use super::super::snap;
 use super::super::{App, EditorTool};
-use super::super::discover::winit_key_to_agate;
 
 pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     if app.grab_pose_editor.is_some() {
@@ -23,7 +23,9 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     if !cmd {
         if let Some(txt) = &event.text {
             for ch in txt.chars() {
-                if !ch.is_control() { app.text_input.push(ch); }
+                if !ch.is_control() {
+                    app.text_input.push(ch);
+                }
             }
         }
     }
@@ -55,7 +57,13 @@ fn grab_pose_key(app: &mut App, ev: &KeyEvent) {
     match &ev.logical_key {
         Key::Named(NamedKey::Escape) => grab_pose_editor::close(app),
         Key::Character(s) if cmd => match s.as_str() {
-            "z" | "Z" => if shift { grab_pose_editor::redo(app) } else { grab_pose_editor::undo(app) },
+            "z" | "Z" => {
+                if shift {
+                    grab_pose_editor::redo(app)
+                } else {
+                    grab_pose_editor::undo(app)
+                }
+            }
             _ => {}
         },
         _ => {}
@@ -74,7 +82,7 @@ fn editor_key(app: &mut App, ev: &KeyEvent) {
         Key::Named(NamedKey::ArrowDown) => ed.move_down(shift),
         Key::Named(NamedKey::Home) => ed.move_home(shift),
         Key::Named(NamedKey::End) => ed.move_end(shift),
-        Key::Named(NamedKey::PageUp)   => ed.page_up(shift),
+        Key::Named(NamedKey::PageUp) => ed.page_up(shift),
         Key::Named(NamedKey::PageDown) => ed.page_down(shift),
         Key::Named(NamedKey::Backspace) => ed.backspace(),
         Key::Named(NamedKey::Delete) => ed.delete_forward(),
@@ -82,19 +90,29 @@ fn editor_key(app: &mut App, ev: &KeyEvent) {
         Key::Named(NamedKey::Tab) => ed.insert_str("  "),
         Key::Named(NamedKey::Space) => ed.insert_char(' '),
         Key::Character(s) if cmd => match s.as_str() {
-            "s" | "S" => { let _ = ed.save(); }
+            "s" | "S" => {
+                let _ = ed.save();
+            }
             "a" | "A" => ed.select_all(),
             "c" | "C" => ed.copy(),
             "x" | "X" => ed.cut(),
             "v" | "V" => ed.paste(),
-            "z" | "Z" => if shift { ed.redo() } else { ed.undo() },
+            "z" | "Z" => {
+                if shift {
+                    ed.redo()
+                } else {
+                    ed.undo()
+                }
+            }
             _ => {}
         },
         _ => {
             if !cmd {
                 if let Some(txt) = &ev.text {
                     for ch in txt.chars() {
-                        if !ch.is_control() { ed.insert_char(ch); }
+                        if !ch.is_control() {
+                            ed.insert_char(ch);
+                        }
                     }
                 }
             }

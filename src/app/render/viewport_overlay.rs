@@ -24,7 +24,6 @@ pub(crate) fn draw(
     let modes = [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale];
     let mode_labels = ["Move", "Rotate", "Scale"];
 
-    // Draw pill background behind all 3 mode buttons (Xcode-style recessed trough)
     let first_r = mode_rects[0];
     let last_r = mode_rects[2];
     let pill_w = last_r[0] + last_r[2] - first_r[0];
@@ -46,7 +45,6 @@ pub(crate) fn draw(
         ui.tooltip(mode_rects[i], mode_tooltips[i]);
     }
 
-    // Thin vertical separator lines between mode buttons
     for i in 0..2 {
         let r = mode_rects[i];
         let inset = theme.px(6.0);
@@ -60,7 +58,10 @@ pub(crate) fn draw(
     let tfirst = tool_rects[0];
     let tlast = tool_rects[2];
     let tpill_w = tlast[0] + tlast[2] - tfirst[0];
-    ui.panel([tfirst[0], tfirst[1], tpill_w, tfirst[3]], t::CONTROL_ACTIVE);
+    ui.panel(
+        [tfirst[0], tfirst[1], tpill_w, tfirst[3]],
+        t::CONTROL_ACTIVE,
+    );
 
     let tool_tooltips = [
         "Select and move objects",
@@ -94,7 +95,15 @@ pub(crate) fn draw(
         let hand_tooltips = ["Left hand", "Right hand"];
         let hfirst = hand_rects[0];
         let hlast = hand_rects[1];
-        ui.panel([hfirst[0], hfirst[1], hlast[0] + hlast[2] - hfirst[0], hfirst[3]], t::CONTROL_ACTIVE);
+        ui.panel(
+            [
+                hfirst[0],
+                hfirst[1],
+                hlast[0] + hlast[2] - hfirst[0],
+                hfirst[3],
+            ],
+            t::CONTROL_ACTIVE,
+        );
         for i in 0..2 {
             let active = current_hand == hands[i];
             let (bg, fg) = if active {
@@ -109,15 +118,14 @@ pub(crate) fn draw(
         }
     }
 
-    // Camera-nav squares (click + drag anywhere on one to orbit/pan/zoom;
-    // `mouse.rs` does the actual hit-testing against these same
-    // `layout.gizmo_rects()` rects). These previously had no visual
-    // representation at all — undiscoverable — so draw them like any other
-    // toggle, highlighting whichever one is actively being dragged.
     let gizmo_nav_rects = layout.gizmo_rects(theme);
     let gizmo_nav_parts = [GizmoPart::Orbit, GizmoPart::Pan, GizmoPart::Zoom];
     let gizmo_nav_labels = ["O", "P", "Z"];
-    let gizmo_nav_tooltips = ["Orbit camera (drag)", "Pan camera (drag)", "Zoom camera (drag)"];
+    let gizmo_nav_tooltips = [
+        "Orbit camera (drag)",
+        "Pan camera (drag)",
+        "Zoom camera (drag)",
+    ];
     for i in 0..3 {
         let active = gizmo_drag == Some(gizmo_nav_parts[i]);
         let (bg, fg) = if active {
@@ -137,15 +145,23 @@ pub(crate) fn draw(
 
     if available_models.is_empty() {
         ui.label_styled(
-            cx, tray[1] + theme.px(6.0),
+            cx,
+            tray[1] + theme.px(6.0),
             "No models found in game/models/",
-            theme.small(), t::TEXT_SECONDARY, cw, Some(tray),
+            theme.small(),
+            t::TEXT_SECONDARY,
+            cw,
+            Some(tray),
         );
     } else {
         ui.label_styled(
-            cx, tray[1] + theme.px(6.0),
+            cx,
+            tray[1] + theme.px(6.0),
             "Drag a model into the scene",
-            theme.small(), t::TEXT_SECONDARY, cw, Some(tray),
+            theme.small(),
+            t::TEXT_SECONDARY,
+            cw,
+            Some(tray),
         );
 
         let list = layout.model_list_area(theme);
@@ -154,12 +170,13 @@ pub(crate) fn draw(
 
         let model_rects = layout.model_rects(theme, available_models.len(), *model_scroll_y);
         for (i, r) in model_rects.iter().enumerate() {
-            // Skip rows scrolled fully out of the visible list area — pure
-            // performance, correctness is handled by the clip rect below.
-            if r[1] + r[3] < list[1] || r[1] > list[1] + list[3] { continue; }
+            if r[1] + r[3] < list[1] || r[1] > list[1] + list[3] {
+                continue;
+            }
 
             let path = &available_models[i];
-            let label = path.file_stem()
+            let label = path
+                .file_stem()
                 .map(|s| s.to_string_lossy().to_string())
                 .unwrap_or_else(|| format!("model {i}"));
             let active = dragging_new_model.as_deref() == Some(path.as_path());
@@ -173,13 +190,16 @@ pub(crate) fn draw(
             };
             ui.panel_clipped(*r, bg, Some(list));
             ui.label_styled(
-                r[0] + theme.px(10.0), r[1] + (r[3] - theme.small()) * 0.5,
-                &label, theme.small(), fg, r[2] - theme.px(20.0), Some(list),
+                r[0] + theme.px(10.0),
+                r[1] + (r[3] - theme.small()) * 0.5,
+                &label,
+                theme.small(),
+                fg,
+                r[2] - theme.px(20.0),
+                Some(list),
             );
         }
 
-        // Scrollbar hint so it's clear the grid can be scrolled — same
-        // rounded-thumb treatment and color as the navigator's scroll_area.
         if max_scroll > 0.0 {
             let track_h = list[3];
             let thumb_h = (track_h * list[3] / (list[3] + max_scroll)).max(theme.px(24.0));

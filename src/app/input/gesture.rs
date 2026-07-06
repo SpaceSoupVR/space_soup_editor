@@ -5,7 +5,9 @@ use super::super::{App, ViewMode};
 use agate::Theme;
 
 pub(crate) fn pinch(app: &mut App, delta: f64, phase: TouchPhase) {
-    if phase == TouchPhase::Cancelled { return; }
+    if phase == TouchPhase::Cancelled {
+        return;
+    }
 
     if app.grab_pose_editor.is_some() {
         if over_grab_pose_viewport(app) {
@@ -25,9 +27,7 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
         MouseScrollDelta::LineDelta(x, y) => (x * 20.0, y * 20.0),
         MouseScrollDelta::PixelDelta(p) => (p.x as f32, p.y as f32),
     };
-    // Always accumulate scroll_y — agate's nav-panel scroll_area reads this
-    // every frame and only applies it while that panel is hovered, so it
-    // must keep flowing even when the camera itself shouldn't move.
+
     app.scroll_y += dy * 0.05;
 
     if app.grab_pose_editor.is_some() {

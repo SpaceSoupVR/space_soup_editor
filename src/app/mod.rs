@@ -16,12 +16,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
+use wgpu::{Instance, InstanceDescriptor, Surface, SurfaceConfiguration};
 use winit::keyboard::ModifiersState;
 use winit::window::Window;
-use wgpu::{Instance, InstanceDescriptor, Surface, SurfaceConfiguration};
 
-use space_soup::renderer::{Camera, GltfMesh, Renderer};
 use space_soup::renderer::mesh_pipeline::ModelUniform;
+use space_soup::renderer::{Camera, GltfMesh, Renderer};
 use space_soup::ui2d::Overlay;
 use space_soup_engine::{GameRuntime, Hand};
 
@@ -78,8 +78,7 @@ pub(crate) struct App {
     pub(crate) mouse_released: Vec<AMouseButton>,
     pub(crate) mouse_held: Vec<AMouseButton>,
     pub(crate) scroll_y: f32,
-    /// Vertical scroll offset (px) of the "drag a model into the scene"
-    /// tray's grid, for when there are more models than fit at once.
+
     pub(crate) model_scroll_y: f32,
     pub(crate) text_input: String,
     pub(crate) named_keys: Vec<agate::input::NamedKey>,
@@ -220,13 +219,18 @@ impl App {
     }
 
     pub(crate) fn win_size(&self) -> (f32, f32) {
-        self.window.as_ref().map(|w| {
-            let s = w.inner_size();
-            (s.width as f32, s.height as f32)
-        }).unwrap_or((0.0, 0.0))
+        self.window
+            .as_ref()
+            .map(|w| {
+                let s = w.inner_size();
+                (s.width as f32, s.height as f32)
+            })
+            .unwrap_or((0.0, 0.0))
     }
 
     pub(crate) fn redraw_now(&self) {
-        if let Some(w) = &self.window { w.request_redraw(); }
+        if let Some(w) = &self.window {
+            w.request_redraw();
+        }
     }
 }

@@ -1,7 +1,7 @@
-use std::sync::{Arc, Mutex};
 use std::net::TcpListener;
+use std::sync::{Arc, Mutex};
 
-use space_soup_engine::{DebugPacket, debug_receiver::PacketReader};
+use space_soup_engine::{debug_receiver::PacketReader, DebugPacket};
 
 pub type SharedPacket = Arc<Mutex<DebugPacket>>;
 

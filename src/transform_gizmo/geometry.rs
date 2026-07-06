@@ -15,7 +15,9 @@ pub(crate) fn merge(a: Geo, b: Geo) -> Geo {
 pub(crate) fn translate_geo(g: Geo, t: [f32; 3]) -> Geo {
     let (p, n, i) = g;
     (
-        p.into_iter().map(|q| [q[0] + t[0], q[1] + t[1], q[2] + t[2]]).collect(),
+        p.into_iter()
+            .map(|q| [q[0] + t[0], q[1] + t[1], q[2] + t[2]])
+            .collect(),
         n,
         i,
     )
@@ -23,7 +25,11 @@ pub(crate) fn translate_geo(g: Geo, t: [f32; 3]) -> Geo {
 
 pub(crate) fn apply_rot(g: Geo, f: fn([f32; 3]) -> [f32; 3]) -> Geo {
     let (p, n, i) = g;
-    (p.into_iter().map(f).collect(), n.into_iter().map(f).collect(), i)
+    (
+        p.into_iter().map(f).collect(),
+        n.into_iter().map(f).collect(),
+        i,
+    )
 }
 
 fn cylinder(radius: f32, height: f32, segments: usize) -> Geo {
@@ -120,8 +126,14 @@ fn torus(major_r: f32, minor_r: f32, major_seg: usize, minor_seg: usize) -> Geo 
 fn cube(half: f32, center: [f32; 3]) -> Geo {
     let h = half;
     let corners = [
-        [-h, -h, -h], [h, -h, -h], [h, h, -h], [-h, h, -h],
-        [-h, -h, h],  [h, -h, h],  [h, h, h],  [-h, h, h],
+        [-h, -h, -h],
+        [h, -h, -h],
+        [h, h, -h],
+        [-h, h, -h],
+        [-h, -h, h],
+        [h, -h, h],
+        [h, h, h],
+        [-h, h, h],
     ];
     let faces: [([usize; 4], [f32; 3]); 6] = [
         ([0, 1, 2, 3], [0.0, 0.0, -1.0]),
@@ -149,7 +161,12 @@ fn cube(half: f32, center: [f32; 3]) -> Geo {
 fn quad_double_sided_rect(w: f32, h: f32) -> Geo {
     let hw = w * 0.5;
     let hh = h * 0.5;
-    let p = [[-hw, -hh, 0.0], [hw, -hh, 0.0], [hw, hh, 0.0], [-hw, hh, 0.0]];
+    let p = [
+        [-hw, -hh, 0.0],
+        [hw, -hh, 0.0],
+        [hw, hh, 0.0],
+        [-hw, hh, 0.0],
+    ];
     let mut positions = Vec::new();
     let mut normals = Vec::new();
     let mut indices = Vec::new();
@@ -173,10 +190,22 @@ fn quad_double_sided(size: f32) -> Geo {
 fn square_frame(outer: f32, thickness: f32) -> Geo {
     let h = outer * 0.5 - thickness * 0.5;
     let mut geo: Geo = (Vec::new(), Vec::new(), Vec::new());
-    geo = merge(geo, translate_geo(quad_double_sided_rect(outer, thickness), [0.0, h, 0.0]));
-    geo = merge(geo, translate_geo(quad_double_sided_rect(outer, thickness), [0.0, -h, 0.0]));
-    geo = merge(geo, translate_geo(quad_double_sided_rect(thickness, outer), [h, 0.0, 0.0]));
-    geo = merge(geo, translate_geo(quad_double_sided_rect(thickness, outer), [-h, 0.0, 0.0]));
+    geo = merge(
+        geo,
+        translate_geo(quad_double_sided_rect(outer, thickness), [0.0, h, 0.0]),
+    );
+    geo = merge(
+        geo,
+        translate_geo(quad_double_sided_rect(outer, thickness), [0.0, -h, 0.0]),
+    );
+    geo = merge(
+        geo,
+        translate_geo(quad_double_sided_rect(thickness, outer), [h, 0.0, 0.0]),
+    );
+    geo = merge(
+        geo,
+        translate_geo(quad_double_sided_rect(thickness, outer), [-h, 0.0, 0.0]),
+    );
     geo
 }
 
@@ -231,7 +260,15 @@ pub(crate) fn geometry_for(mode: GizmoMode, axis: Axis) -> Option<Geo> {
 
 pub(crate) fn all_axes_for(mode: GizmoMode) -> &'static [Axis] {
     match mode {
-        GizmoMode::Translate => &[Axis::X, Axis::Y, Axis::Z, Axis::XY, Axis::XZ, Axis::YZ, Axis::XYZ],
+        GizmoMode::Translate => &[
+            Axis::X,
+            Axis::Y,
+            Axis::Z,
+            Axis::XY,
+            Axis::XZ,
+            Axis::YZ,
+            Axis::XYZ,
+        ],
         GizmoMode::Rotate => &[Axis::X, Axis::Y, Axis::Z, Axis::XYZ],
         GizmoMode::Scale => &[Axis::X, Axis::Y, Axis::Z, Axis::XYZ],
     }

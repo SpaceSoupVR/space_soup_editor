@@ -1,6 +1,3 @@
-//! Disk discovery (scene .json files, model .glb/.gltf files) and small
-//! platform glue (font loading, winit->agate key mapping).
-
 use std::path::{Path, PathBuf};
 
 use winit::keyboard::{Key, NamedKey};
@@ -13,14 +10,21 @@ pub(crate) fn game_dir() -> PathBuf {
 
 pub(crate) fn discover_json(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
-    let mut push = |p: PathBuf| { if p.extension().map_or(false, |e| e == "json") { out.push(p); } };
+    let mut push = |p: PathBuf| {
+        if p.extension().is_some_and(|e| e == "json") {
+            out.push(p);
+        }
+    };
     if let Ok(rd) = std::fs::read_dir(dir) {
         for e in rd.flatten() {
             let p = e.path();
-            if p.is_file() { push(p); }
-            else if p.is_dir() {
+            if p.is_file() {
+                push(p);
+            } else if p.is_dir() {
                 if let Ok(rd2) = std::fs::read_dir(&p) {
-                    for e2 in rd2.flatten() { push(e2.path()); }
+                    for e2 in rd2.flatten() {
+                        push(e2.path());
+                    }
                 }
             }
         }
@@ -29,8 +33,6 @@ pub(crate) fn discover_json(dir: &Path) -> Vec<PathBuf> {
     out
 }
 
-/// Finds every .glb/.gltf under `<game_dir>/models/` — these populate the
-/// "drag a model into the scene" tray in Edit mode.
 pub(crate) fn discover_models(dir: &Path) -> Vec<PathBuf> {
     let mut out = Vec::new();
     let models_dir = dir.join("models");

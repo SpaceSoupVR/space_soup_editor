@@ -45,10 +45,6 @@ impl Layout {
         let margin = theme.px(WINDOW_MARGIN);
         let gap = theme.px(PANEL_GAP);
 
-        // Floating panels: every panel is inset from the window edge by
-        // `margin` and separated from its neighbors by `gap`, so the 3D
-        // viewport shows through behind them instead of panels tiling
-        // edge-to-edge.
         let toolbar = rect_from(margin, margin, (win_w - 2.0 * margin).max(0.0), tb_h);
 
         let body_y = margin + tb_h + gap;
@@ -57,14 +53,26 @@ impl Layout {
         let navigator = rect_from(margin, body_y, nav_w, body_h);
         let inspector = rect_from((win_w - margin - ins_w).max(0.0), body_y, ins_w, body_h);
         let center = rect_from(
-            margin + nav_w + gap, body_y,
-            (win_w - 2.0 * margin - nav_w - ins_w - 2.0 * gap).max(0.0), body_h,
+            margin + nav_w + gap,
+            body_y,
+            (win_w - 2.0 * margin - nav_w - ins_w - 2.0 * gap).max(0.0),
+            body_h,
         );
 
-        let statusbar = rect_from(margin, win_h - margin - sb_h, (win_w - 2.0 * margin).max(0.0), sb_h);
+        let statusbar = rect_from(
+            margin,
+            win_h - margin - sb_h,
+            (win_w - 2.0 * margin).max(0.0),
+            sb_h,
+        );
 
         let editor_tab = rect_from(center[0], body_y, center[2], tab_h);
-        let editor_body = rect_from(center[0], body_y + tab_h, center[2], (body_h - tab_h).max(0.0));
+        let editor_body = rect_from(
+            center[0],
+            body_y + tab_h,
+            center[2],
+            (body_h - tab_h).max(0.0),
+        );
 
         let pad = theme.px(PAD);
         let seg_h = theme.px(30.0);
@@ -77,7 +85,7 @@ impl Layout {
             rect_from(seg_x0 + 2.0 * seg_w, seg_y, seg_w, seg_h),
             rect_from(seg_x0 + 3.0 * seg_w, seg_y, seg_w, seg_h),
         ];
-        // Combined pill bounding rect for all 4 segments
+
         let seg_pill = rect_from(seg_x0, seg_y, 4.0 * seg_w, seg_h);
 
         let bw = theme.px(80.0);
@@ -85,25 +93,38 @@ impl Layout {
         let toolbar_right = toolbar[0] + toolbar[2];
         let btn_save = rect_from(toolbar_right - pad - bw, seg_y, bw, seg_h);
         let btn_editor = rect_from(btn_save[0] - btn_gap - bw, seg_y, bw, seg_h);
-        let btn_save_scene = rect_from(btn_editor[0] - btn_gap - theme.px(110.0), seg_y, theme.px(110.0), seg_h);
+        let btn_save_scene = rect_from(
+            btn_editor[0] - btn_gap - theme.px(110.0),
+            seg_y,
+            theme.px(110.0),
+            seg_h,
+        );
 
         Self {
-            toolbar, navigator, inspector, statusbar, center,
-            editor_tab, editor_body, seg, seg_pill, btn_editor, btn_save, btn_save_scene,
+            toolbar,
+            navigator,
+            inspector,
+            statusbar,
+            center,
+            editor_tab,
+            editor_body,
+            seg,
+            seg_pill,
+            btn_editor,
+            btn_save,
+            btn_save_scene,
         }
     }
 
-    /// Widens `center` to also cover where the navigator normally sits —
-    /// used by the Grab Pose Editor's isolated viewport, which hides the
-    /// object list (nothing else in the scene is shown while it's open) in
-    /// favor of a larger 3D view.
     pub fn grab_pose_viewport(&self) -> Rect {
-        rect_from(self.navigator[0], self.center[1], self.center[0] + self.center[2] - self.navigator[0], self.center[3])
+        rect_from(
+            self.navigator[0],
+            self.center[1],
+            self.center[0] + self.center[2] - self.navigator[0],
+            self.center[3],
+        )
     }
 
-    /// Fixed on-screen height of the model tray. Kept as a named constant
-    /// (rather than inlined) so `mouse.rs`'s "is the cursor above the tray"
-    /// check and the tray's own layout can't drift apart.
     pub const MODEL_TRAY_H: f32 = 120.0;
     const MODEL_LIST_TOP_PAD: f32 = 26.0;
     const MODEL_CHIP_W: f32 = 110.0;
@@ -120,15 +141,17 @@ impl Layout {
         rect_from(x, y, w, bar_h)
     }
 
-    /// Scrollable region of the tray, below the fixed "Drag a model into the
-    /// scene" label row.
     pub fn model_list_area(&self, theme: &Theme) -> Rect {
         let tray = self.model_tray(theme);
         let top_pad = theme.px(Self::MODEL_LIST_TOP_PAD);
-        rect_from(tray[0], tray[1] + top_pad, tray[2], (tray[3] - top_pad - theme.px(8.0)).max(0.0))
+        rect_from(
+            tray[0],
+            tray[1] + top_pad,
+            tray[2],
+            (tray[3] - top_pad - theme.px(8.0)).max(0.0),
+        )
     }
 
-    /// How many model chips fit per row given the tray's current width.
     pub fn model_columns(&self, theme: &Theme) -> usize {
         let tray = self.model_tray(theme);
         let mw = theme.px(Self::MODEL_CHIP_W);
@@ -138,11 +161,6 @@ impl Layout {
         ((usable / (mw + gap)).floor() as usize).max(1)
     }
 
-    /// Left-aligned grid of model chips, wrapping to further rows once the
-    /// tray runs out of horizontal room. `scroll_y` (in pixels, clamped by
-    /// the caller via `model_max_scroll`) shifts every row up so the grid can
-    /// be scrolled instead of overflowing the tray when there are more
-    /// models than fit on screen at once.
     pub fn model_rects(&self, theme: &Theme, count: usize, scroll_y: f32) -> Vec<Rect> {
         let tray = self.model_tray(theme);
         let list = self.model_list_area(theme);
@@ -151,17 +169,17 @@ impl Layout {
         let gap = theme.px(Self::MODEL_CHIP_GAP);
         let pad_x = theme.px(Self::MODEL_PAD_X);
         let cols = self.model_columns(theme);
-        (0..count).map(|i| {
-            let col = i % cols;
-            let row = i / cols;
-            let x = tray[0] + pad_x + col as f32 * (mw + gap);
-            let y = list[1] + row as f32 * (mh + gap) - scroll_y;
-            rect_from(x, y, mw, mh)
-        }).collect()
+        (0..count)
+            .map(|i| {
+                let col = i % cols;
+                let row = i / cols;
+                let x = tray[0] + pad_x + col as f32 * (mw + gap);
+                let y = list[1] + row as f32 * (mh + gap) - scroll_y;
+                rect_from(x, y, mw, mh)
+            })
+            .collect()
     }
 
-    /// Total (unscrolled) height of the model grid content, used to compute
-    /// how far `model_rects`' `scroll_y` is allowed to go.
     pub fn model_content_height(&self, theme: &Theme, count: usize) -> f32 {
         let cols = self.model_columns(theme);
         let rows = count.max(1).div_ceil(cols) as f32;
@@ -205,8 +223,6 @@ impl Layout {
         std::array::from_fn(|i| rect_from(x0 + i as f32 * (w + gap), y, w, h))
     }
 
-    /// Small "L"/"R" pill next to the tool buttons — the target hand for the
-    /// Rigging/Snap tools' grip-pose seeding and preview.
     pub fn hand_toggle_rects(&self, theme: &Theme) -> [Rect; 2] {
         let tools = self.tool_button_rects(theme);
         let w = theme.px(32.0);
@@ -233,19 +249,34 @@ impl Layout {
         let pos_rh = hh + rp * 1.5 + 3.0 * fh + 2.0 * (rp * 0.5);
         let pos_card = rect_from(cx, pos_y, cw, pos_rh);
         let pos_rows: [Rect; 3] = std::array::from_fn(|i| {
-            rect_from(cx + rp, pos_y + hh + rp + i as f32 * (fh + rp * 0.5), cw - rp * 2.0, fh)
+            rect_from(
+                cx + rp,
+                pos_y + hh + rp + i as f32 * (fh + rp * 0.5),
+                cw - rp * 2.0,
+                fh,
+            )
         });
 
         let sz_y = pos_y + pos_rh + cg;
         let sz_card = rect_from(cx, sz_y, cw, pos_rh);
         let sz_rows: [Rect; 3] = std::array::from_fn(|i| {
-            rect_from(cx + rp, sz_y + hh + rp + i as f32 * (fh + rp * 0.5), cw - rp * 2.0, fh)
+            rect_from(
+                cx + rp,
+                sz_y + hh + rp + i as f32 * (fh + rp * 0.5),
+                cw - rp * 2.0,
+                fh,
+            )
         });
 
         let rot_y = sz_y + pos_rh + cg;
         let rot_card = rect_from(cx, rot_y, cw, pos_rh);
         let rot_rows: [Rect; 3] = std::array::from_fn(|i| {
-            rect_from(cx + rp, rot_y + hh + rp + i as f32 * (fh + rp * 0.5), cw - rp * 2.0, fh)
+            rect_from(
+                cx + rp,
+                rot_y + hh + rp + i as f32 * (fh + rp * 0.5),
+                cw - rp * 2.0,
+                fh,
+            )
         });
 
         let col_y = rot_y + pos_rh + cg;
@@ -269,14 +300,19 @@ impl Layout {
 
         InspectorCards {
             name_row,
-            pos_card, pos_rows,
-            sz_card, sz_rows,
-            rot_card, rot_rows,
-            col_card, col_row,
+            pos_card,
+            pos_rows,
+            sz_card,
+            sz_rows,
+            rot_card,
+            rot_rows,
+            col_card,
+            col_row,
             btn_voxelize,
             btn_script,
             btn_grab_pose,
-            btn_dup, btn_del,
+            btn_dup,
+            btn_del,
             bottom_y: act_y + theme.px(30.0),
         }
     }
@@ -284,13 +320,18 @@ impl Layout {
 
 pub(crate) struct InspectorCards {
     pub name_row: Rect,
-    pub pos_card: Rect, pub pos_rows: [Rect; 3],
-    pub sz_card: Rect, pub sz_rows: [Rect; 3],
-    pub rot_card: Rect, pub rot_rows: [Rect; 3],
-    pub col_card: Rect, pub col_row: Rect,
+    pub pos_card: Rect,
+    pub pos_rows: [Rect; 3],
+    pub sz_card: Rect,
+    pub sz_rows: [Rect; 3],
+    pub rot_card: Rect,
+    pub rot_rows: [Rect; 3],
+    pub col_card: Rect,
+    pub col_row: Rect,
     pub btn_voxelize: Rect,
     pub btn_script: Rect,
     pub btn_grab_pose: Rect,
-    pub btn_dup: Rect, pub btn_del: Rect,
+    pub btn_dup: Rect,
+    pub btn_del: Rect,
     pub bottom_y: f32,
 }

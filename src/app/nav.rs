@@ -19,23 +19,33 @@ pub(crate) enum NavGroup {
 impl App {
     pub(crate) fn nav_rows(&self) -> Vec<NavRow> {
         let mut rows = Vec::new();
-        rows.push(NavRow::GroupHeader { group: NavGroup::Scenes });
+        rows.push(NavRow::GroupHeader {
+            group: NavGroup::Scenes,
+        });
         if self.nav_scenes_open {
             if self.files_discovered.is_empty() {
-                rows.push(NavRow::EmptyHint { group: NavGroup::Scenes });
+                rows.push(NavRow::EmptyHint {
+                    group: NavGroup::Scenes,
+                });
             }
             for i in 0..self.files_discovered.len() {
                 rows.push(NavRow::SceneFile { file_index: i });
             }
         }
-        rows.push(NavRow::GroupHeader { group: NavGroup::Objects });
+        rows.push(NavRow::GroupHeader {
+            group: NavGroup::Objects,
+        });
         if self.nav_objects_open {
             let objects = &self.runtime.scene().objects;
             if objects.is_empty() {
-                rows.push(NavRow::EmptyHint { group: NavGroup::Objects });
+                rows.push(NavRow::EmptyHint {
+                    group: NavGroup::Objects,
+                });
             }
             for o in objects {
-                rows.push(NavRow::Object { object_id: o.id.clone() });
+                rows.push(NavRow::Object {
+                    object_id: o.id.clone(),
+                });
             }
         }
         rows

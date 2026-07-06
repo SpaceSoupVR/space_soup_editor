@@ -43,12 +43,16 @@ pub(crate) fn draw(
     let mut clicked_nav: Option<usize> = None;
     for (i, row) in nav_rows.iter().enumerate() {
         let row_y = rows_area[1] + top_pad + i as f32 * row_h - scroll_y;
-        // Cull rows with no overlap at all with the visible area — pure
-        // performance, not correctness; clipping below handles correctness.
+
         if row_y + row_h < rows_area[1] || row_y > rows_area[1] + rows_area[3] {
             continue;
         }
-        let r = [rows_area[0] + inset, row_y, rows_area[2] - inset * 2.0, row_h];
+        let r = [
+            rows_area[0] + inset,
+            row_y,
+            rows_area[2] - inset * 2.0,
+            row_h,
+        ];
 
         match row {
             NavRow::GroupHeader { group } => {
@@ -60,7 +64,7 @@ pub(crate) fn draw(
                     NavGroup::Scenes => "Scenes",
                     NavGroup::Objects => "Objects",
                 };
-                // Flat section header: slightly raised SURFACE strip + disclosure chevron
+
                 ui.fill(r, t::SURFACE);
                 let new_open = ui.disclosure(r, open, label);
                 match group {
@@ -69,20 +73,22 @@ pub(crate) fn draw(
                 }
             }
             NavRow::SceneFile { file_index } => {
-                let name = files_discovered.get(*file_index)
+                let name = files_discovered
+                    .get(*file_index)
                     .and_then(|p| p.file_name())
                     .map(|n| n.to_string_lossy().to_string())
                     .unwrap_or_default();
                 let sel = *selected_file == Some(*file_index) && is_file_editor;
-                // Indent scene file rows by 20px
+
                 let ir = [r[0] + theme.px(20.0), r[1], r[2] - theme.px(20.0), r[3]];
                 if ui.list_row_clipped(ir, &name, sel, Some(rows_area)) {
                     clicked_nav = Some(*file_index);
                 }
             }
             NavRow::Object { object_id } => {
-                let sel = selected_object.as_deref() == Some(object_id.as_str()) && editing.is_none();
-                // Indent object rows by 28px (deeper than scene files)
+                let sel =
+                    selected_object.as_deref() == Some(object_id.as_str()) && editing.is_none();
+
                 let ir = [r[0] + theme.px(28.0), r[1], r[2] - theme.px(28.0), r[3]];
                 if ui.list_row_clipped(ir, object_id, sel, Some(rows_area)) {
                     *editing = None;
@@ -94,8 +100,15 @@ pub(crate) fn draw(
                     NavGroup::Scenes => "No .json files found",
                     NavGroup::Objects => "No objects placed",
                 };
-                ui.label_styled(r[0] + theme.px(28.0), r[1] + (r[3] - theme.small()) * 0.5,
-                    hint, theme.small(), t::TEXT_DISABLED, r[2], Some(rows_area));
+                ui.label_styled(
+                    r[0] + theme.px(28.0),
+                    r[1] + (r[3] - theme.small()) * 0.5,
+                    hint,
+                    theme.small(),
+                    t::TEXT_DISABLED,
+                    r[2],
+                    Some(rows_area),
+                );
             }
         }
     }
@@ -105,17 +118,30 @@ pub(crate) fn draw(
     let nx = nav[0];
     let nw = nav[2];
     let clip_nav = [nx, footer_y, nw, footer_h];
-    // No separator — flat Xcode style footer flows directly from the list
-    ui.label_styled(nx + theme.px(PAD), footer_y + theme.px(8.0),
-        "SCENE", theme.small(), t::TEXT_SECONDARY, nw, None);
+
+    ui.label_styled(
+        nx + theme.px(PAD),
+        footer_y + theme.px(8.0),
+        "SCENE",
+        theme.small(),
+        t::TEXT_SECONDARY,
+        nw,
+        None,
+    );
     let info = format!(
         "{}\nobjects: {}\ncuboids: {}\nmeshes:  {}",
-        packet.scene.scene_name, objects.len(),
-        packet.scene.render_cuboids, packet.scene.render_meshes,
+        packet.scene.scene_name,
+        objects.len(),
+        packet.scene.render_cuboids,
+        packet.scene.render_meshes,
     );
     ui.label_styled(
-        nx + theme.px(PAD), footer_y + theme.px(8.0 + ROW_H),
-        &info, theme.small(), t::TEXT_PRIMARY, nw - theme.px(PAD * 2.0),
+        nx + theme.px(PAD),
+        footer_y + theme.px(8.0 + ROW_H),
+        &info,
+        theme.small(),
+        t::TEXT_PRIMARY,
+        nw - theme.px(PAD * 2.0),
         Some(clip_nav),
     );
 

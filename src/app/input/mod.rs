@@ -23,7 +23,9 @@ pub(crate) fn handle_window_event(
         }
         WindowEvent::Resized(size) => resize::resized(app, size),
 
-        WindowEvent::ModifiersChanged(m) => { app.mods = m.state(); }
+        WindowEvent::ModifiersChanged(m) => {
+            app.mods = m.state();
+        }
 
         WindowEvent::KeyboardInput { event, .. } => {
             if event.state == ElementState::Pressed {
@@ -35,7 +37,11 @@ pub(crate) fn handle_window_event(
         WindowEvent::CursorMoved { position, .. } => {
             mouse::cursor_moved(app, position);
         }
-        WindowEvent::MouseInput { state, button: winit::event::MouseButton::Left, .. } => {
+        WindowEvent::MouseInput {
+            state,
+            button: winit::event::MouseButton::Left,
+            ..
+        } => {
             mouse::left_button(app, state);
         }
 

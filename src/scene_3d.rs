@@ -1,20 +1,34 @@
-use glam::{Vec3, Quat};
-use space_soup::renderer::{Cuboid, Color3};
+use glam::{Quat, Vec3};
+use space_soup::renderer::{Color3, Cuboid};
 use space_soup_engine::{HandSample, RenderCuboid};
-
 
 pub fn engine_cuboid_to_render(rc: &RenderCuboid) -> Cuboid {
     let mut c = match rc.style {
         space_soup_engine::CuboidStyle::Solid => Cuboid::solid(
-            rc.position, rc.half_size, Color3(rc.color.0, rc.color.1, rc.color.2, rc.color.3),
+            rc.position,
+            rc.half_size,
+            Color3(rc.color.0, rc.color.1, rc.color.2, rc.color.3),
         ),
         space_soup_engine::CuboidStyle::Wireframe => Cuboid::wireframe(
-            rc.position, rc.half_size, Color3(rc.wire_color.0, rc.wire_color.1, rc.wire_color.2, rc.wire_color.3),
+            rc.position,
+            rc.half_size,
+            Color3(
+                rc.wire_color.0,
+                rc.wire_color.1,
+                rc.wire_color.2,
+                rc.wire_color.3,
+            ),
         ),
         space_soup_engine::CuboidStyle::SolidAndWire => Cuboid::solid_and_wire(
-            rc.position, rc.half_size,
+            rc.position,
+            rc.half_size,
             Color3(rc.color.0, rc.color.1, rc.color.2, rc.color.3),
-            Color3(rc.wire_color.0, rc.wire_color.1, rc.wire_color.2, rc.wire_color.3),
+            Color3(
+                rc.wire_color.0,
+                rc.wire_color.1,
+                rc.wire_color.2,
+                rc.wire_color.3,
+            ),
         ),
     };
     c.rotation = rc.rotation;
@@ -24,7 +38,7 @@ pub fn engine_cuboid_to_render(rc: &RenderCuboid) -> Cuboid {
 pub fn build_player_overlay(
     world_head_pos: Vec3,
     world_head_rot: Quat,
-    left_hand:  &HandSample,
+    left_hand: &HandSample,
     right_hand: &HandSample,
     hand_transform: impl Fn(Vec3, Quat) -> (Vec3, Quat),
 ) -> Vec<Cuboid> {
@@ -52,8 +66,18 @@ pub fn build_player_overlay(
         c
     });
 
-    push_hand(&mut cuboids, left_hand,  Color3(180, 200, 255, 255), &hand_transform);
-    push_hand(&mut cuboids, right_hand, Color3(255, 200, 180, 255), &hand_transform);
+    push_hand(
+        &mut cuboids,
+        left_hand,
+        Color3(180, 200, 255, 255),
+        &hand_transform,
+    );
+    push_hand(
+        &mut cuboids,
+        right_hand,
+        Color3(255, 200, 180, 255),
+        &hand_transform,
+    );
 
     cuboids
 }
@@ -66,7 +90,9 @@ fn push_hand(
 ) {
     if hand.tracking_active && !hand.joints.is_empty() {
         for j in &hand.joints {
-            if !j.valid { continue; }
+            if !j.valid {
+                continue;
+            }
             let size = if j.name.contains("tip") {
                 Vec3::splat(0.010)
             } else if j.name == "palm" || j.name == "wrist" {
@@ -83,7 +109,10 @@ fn push_hand(
         if let Some(grip) = hand.grip {
             let (pos, rot) = transform(grip.position(), grip.rotation());
             let mut c = Cuboid::solid_and_wire(
-                pos, Vec3::new(0.035, 0.035, 0.06), color, Color3(255, 255, 255, 200),
+                pos,
+                Vec3::new(0.035, 0.035, 0.06),
+                color,
+                Color3(255, 255, 255, 200),
             );
             c.rotation = rot;
             cuboids.push(c);
@@ -114,13 +143,17 @@ pub fn ground_grid() -> Vec<Cuboid> {
     let n = (extent * 2.0 / step) as i32;
     let color = Color3(70, 70, 85, 255);
 
-    for i in -n/2..=n/2 {
+    for i in -n / 2..=n / 2 {
         let x = i as f32 * step;
         grid.push(Cuboid::solid(
-            Vec3::new(x, 0.0, 0.0), Vec3::new(0.004, 0.002, extent), color,
+            Vec3::new(x, 0.0, 0.0),
+            Vec3::new(0.004, 0.002, extent),
+            color,
         ));
         grid.push(Cuboid::solid(
-            Vec3::new(0.0, 0.0, x), Vec3::new(extent, 0.002, 0.004), color,
+            Vec3::new(0.0, 0.0, x),
+            Vec3::new(extent, 0.002, 0.004),
+            color,
         ));
     }
     grid

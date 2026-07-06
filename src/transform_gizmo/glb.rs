@@ -1,18 +1,16 @@
-//! GLB encoding — minimal valid glTF 2.0 binary container, mirroring the
-//! format `voxelize.rs::export_glb` writes elsewhere in this engine.
-
 use space_soup::renderer::Color3;
 
 use super::geometry::Geo;
 
 fn srgb_to_linear(c: u8) -> f32 {
     let c = c as f32 / 255.0;
-    if c <= 0.04045 { c / 12.92 } else { ((c + 0.055) / 1.055).powf(2.4) }
+    if c <= 0.04045 {
+        c / 12.92
+    } else {
+        ((c + 0.055) / 1.055).powf(2.4)
+    }
 }
 
-/// Encodes one mesh part (POSITION + NORMAL + indices + a single flat-color
-/// material) as raw GLB bytes (12-byte header, JSON chunk type 0x4E4F534A
-/// "JSON", BIN chunk type 0x004E4942 "BIN\0", everything 4-byte padded).
 pub(crate) fn write_glb(geo: &Geo, color: Color3) -> Vec<u8> {
     let (positions, normals, indices) = geo;
     let mut min = [f32::MAX; 3];
@@ -105,11 +103,11 @@ pub(crate) fn write_glb(geo: &Geo, color: Color3) -> Vec<u8> {
     out.extend_from_slice(&(total_len as u32).to_le_bytes());
 
     out.extend_from_slice(&(json_bytes.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes()); // "JSON"
+    out.extend_from_slice(&0x4E4F_534Au32.to_le_bytes());
     out.extend_from_slice(&json_bytes);
 
     out.extend_from_slice(&(bin.len() as u32).to_le_bytes());
-    out.extend_from_slice(&0x004E_4942u32.to_le_bytes()); // "BIN\0"
+    out.extend_from_slice(&0x004E_4942u32.to_le_bytes());
     out.extend_from_slice(&bin);
 
     out

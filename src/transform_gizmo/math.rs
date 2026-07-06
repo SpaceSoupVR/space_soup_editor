@@ -1,5 +1,3 @@
-//! Pure math helpers with no GPU or App dependency.
-
 use glam::{Quat, Vec2, Vec3};
 
 use space_soup::renderer::Camera;
@@ -9,14 +7,10 @@ pub(crate) fn normalize3(p: [f32; 3]) -> [f32; 3] {
     [p[0] / len, p[1] / len, p[2] / len]
 }
 
-/// Rotates (x,y,z) so the base shape's +Z axis ends up pointing along +X.
-/// Derived from the standard right-handed R_y(+90°) rotation matrix.
 pub(crate) fn rot_y90(p: [f32; 3]) -> [f32; 3] {
     [p[2], p[1], -p[0]]
 }
 
-/// Rotates (x,y,z) so the base shape's +Z axis ends up pointing along +Y.
-/// Derived from the standard right-handed R_x(-90°) rotation matrix.
 pub(crate) fn rot_x_neg90(p: [f32; 3]) -> [f32; 3] {
     [p[0], p[2], -p[1]]
 }
@@ -33,11 +27,15 @@ pub(crate) fn screen_ray(camera: &Camera, viewport: (f32, f32), mouse: Vec2) -> 
     (near, (far - near).normalize_or_zero())
 }
 
-pub(crate) fn project_to_screen(camera: &Camera, viewport: (f32, f32), world: Vec3) -> Option<Vec2> {
+pub(crate) fn project_to_screen(
+    camera: &Camera,
+    viewport: (f32, f32),
+    world: Vec3,
+) -> Option<Vec2> {
     let view_proj = camera.projection() * camera.view();
     let clip = view_proj * glam::Vec4::new(world.x, world.y, world.z, 1.0);
     if clip.w <= 0.0001 {
-        return None; // behind the camera
+        return None;
     }
     let ndc_x = clip.x / clip.w;
     let ndc_y = clip.y / clip.w;
@@ -46,7 +44,12 @@ pub(crate) fn project_to_screen(camera: &Camera, viewport: (f32, f32), world: Ve
     Some(Vec2::new(sx, sy))
 }
 
-pub(crate) fn ray_plane_intersect(origin: Vec3, dir: Vec3, plane_point: Vec3, normal: Vec3) -> Option<Vec3> {
+pub(crate) fn ray_plane_intersect(
+    origin: Vec3,
+    dir: Vec3,
+    plane_point: Vec3,
+    normal: Vec3,
+) -> Option<Vec3> {
     let denom = dir.dot(normal);
     if denom.abs() < 1e-6 {
         return None;
@@ -58,9 +61,6 @@ pub(crate) fn ray_plane_intersect(origin: Vec3, dir: Vec3, plane_point: Vec3, no
     Some(origin + dir * t)
 }
 
-/// Closest point *on the gizmo's axis line* to the camera ray through the
-/// mouse — the standard way professional tools turn a 2D drag into 1D
-/// motion along a 3D axis.
 pub(crate) fn closest_point_on_line_to_ray(
     line_point: Vec3,
     line_dir: Vec3,
@@ -73,8 +73,6 @@ pub(crate) fn closest_point_on_line_to_ray(
     let ab = a.dot(b);
     let denom = 1.0 - ab * ab;
     if denom.abs() < 1e-6 {
-        // Axis points ~straight at the camera — fall back to a
-        // camera-facing plane through the line point.
         return ray_plane_intersect(ray_origin, ray_dir, line_point, b);
     }
     let t = (ab * r.dot(b) - r.dot(a)) / denom;

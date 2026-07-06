@@ -50,7 +50,8 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
         && over_viewport
     {
         app.xform_gizmo.hovered_axis =
-            app.xform_gizmo.raycast_gizmo(mouse_vec2, &app.camera, viewport);
+            app.xform_gizmo
+                .raycast_gizmo(mouse_vec2, &app.camera, viewport);
     } else {
         app.xform_gizmo.hovered_axis = None;
     }
@@ -73,8 +74,12 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
             app.dragged = true;
         } else if app.moving_object {
             if let Some(id) = app.selected_object.clone() {
-                let plane_y = app.runtime.scene().find_object(&id)
-                    .map(|o| o.cuboid.position.y).unwrap_or(0.0);
+                let plane_y = app
+                    .runtime
+                    .scene()
+                    .find_object(&id)
+                    .map(|o| o.cuboid.position.y)
+                    .unwrap_or(0.0);
                 let (o, d) = app.screen_ray(new.0, new.1, win_w, win_h);
                 if let Some(hit) = ray_plane_intersect(o, d, plane_y) {
                     let target = hit + app.move_anchor_offset;
@@ -95,31 +100,31 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     if app.dragging_new_model.is_some() {
         let (o, d) = app.screen_ray(new.0, new.1, win_w, win_h);
         let in_center = over_viewport && new.1 < layout.model_tray(&theme)[1];
-        app.ghost_preview = if in_center { ray_plane_intersect(o, d, 0.0) } else { None };
+        app.ghost_preview = if in_center {
+            ray_plane_intersect(o, d, 0.0)
+        } else {
+            None
+        };
     }
 
     app.redraw_now();
 }
 
 fn apply_gizmo_drag_to_selected_object(app: &mut App) {
-    let Some(id) = app.selected_object.clone() else { return };
+    let Some(id) = app.selected_object.clone() else {
+        return;
+    };
     let mode = app.xform_gizmo.mode;
     let gizmo_pos = app.xform_gizmo.get_position();
     let gizmo_rot = app.xform_gizmo.get_rotation();
     let gizmo_scale = app.xform_gizmo.get_scale();
 
-    // Resolve the mesh path (if any) before taking a mutable borrow below.
-    let mesh_path = app.runtime.scene().find_object(&id)
+    let mesh_path = app
+        .runtime
+        .scene()
+        .find_object(&id)
         .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
 
-    // Hardset: never depend on `mesh_base_half_size` having been
-    // pre-populated by some earlier loading pass. If it's missing, compute
-    // it right now from the already-loaded GltfMesh in `mesh_cache` and
-    // cache the result — this removes the entire class of "the preload
-    // loop didn't run for this mesh yet" bugs. If the mesh genuinely isn't
-    // in `mesh_cache` either (shouldn't happen once it's visibly rendering,
-    // since render_meshes can't show it otherwise), this still safely
-    // yields None and the mesh scale is simply left untouched this frame.
     let base_half: Option<Vec3> = match &mesh_path {
         Some(path) => {
             if let Some(&cached) = app.mesh_base_half_size.get(path) {
@@ -135,7 +140,9 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
         None => None,
     };
 
-    let Some(obj) = app.runtime.scene_mut().find_object_mut(&id) else { return };
+    let Some(obj) = app.runtime.scene_mut().find_object_mut(&id) else {
+        return;
+    };
     match mode {
         GizmoMode::Translate => {
             let clearance = obj.cuboid.half_size.y + GIZMO_ANCHOR_MARGIN;
@@ -145,7 +152,11 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
             obj.cuboid.rotation = gizmo_rot;
         }
         GizmoMode::Scale => {
-            let new_half = Vec3::new(gizmo_scale.x.max(0.005), gizmo_scale.y.max(0.005), gizmo_scale.z.max(0.005));
+            let new_half = Vec3::new(
+                gizmo_scale.x.max(0.005),
+                gizmo_scale.y.max(0.005),
+                gizmo_scale.z.max(0.005),
+            );
             obj.cuboid.half_size = new_half;
 
             if let (Some(mesh), Some(base)) = (obj.mesh.as_mut(), base_half) {
@@ -160,32 +171,15 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
     app.scene_dirty = true;
 }
 
-/// Cursor handling for the Grab Pose Editor's isolated viewport — hovers/
-/// drags `app.grab_pose_gizmo` when not in Live Grab Preview mode, or spins
-/// the previewed object (`grab_pose_editor::preview_drag`) when it is;
-/// otherwise a plain click-drag orbits `state.orbit` (there's exactly one
-/// object in this view, so there's no picking to do).
-fn grab_pose_cursor_moved(app: &mut App, new: (f32, f32), dx: f32, dy: f32) {
-    let mouse_vec2 = Vec2::new(new.0, new.1);
-    let viewport = app.win_size();
-    let (win_w, win_h) = viewport;
-    let theme = Theme::new(app.scale);
-    let layout = Layout::new(win_w, win_h, &theme);
-    let over_viewport = in_rect(new, layout.grab_pose_viewport()) && !in_rect(new, layout.inspector);
-    let preview_mode = app.grab_pose_editor.as_ref().map(|s| s.preview_mode).unwrap_or(false);
-
-    if !preview_mode && !app.gizmo_dragging && over_viewport {
-        app.grab_pose_gizmo.hovered_axis = app.grab_pose_gizmo.raycast_gizmo(mouse_vec2, &app.camera, viewport);
-    } else {
-        app.grab_pose_gizmo.hovered_axis = None;
-    }
+fn grab_pose_cursor_moved(app: &mut App, _new: (f32, f32), dx: f32, dy: f32) {
+    let preview_mode = app
+        .grab_pose_editor
+        .as_ref()
+        .map(|s| s.preview_mode)
+        .unwrap_or(false);
 
     if app.left_down {
-        if app.gizmo_dragging {
-            app.grab_pose_gizmo.drag(mouse_vec2, &app.camera, viewport);
-            grab_pose_editor::apply_gizmo_drag(app);
-            app.dragged = true;
-        } else if preview_mode {
+        if preview_mode {
             if !app.press_in_chrome {
                 grab_pose_editor::preview_drag(app, dx, dy);
                 app.dragged = true;
@@ -201,9 +195,6 @@ fn grab_pose_cursor_moved(app: &mut App, new: (f32, f32), dx: f32, dy: f32) {
     app.redraw_now();
 }
 
-/// Mirrors `left_button` for the isolated Grab Pose Editor viewport: press
-/// either begins a gizmo drag (with an undo snapshot) or starts an orbit
-/// drag; release commits the gizmo drag if one was in progress.
 fn grab_pose_left_button(app: &mut App, state: ElementState) {
     let (win_w, win_h) = app.win_size();
     let theme = Theme::new(app.scale);
@@ -222,25 +213,9 @@ fn grab_pose_left_button(app: &mut App, state: ElementState) {
             app.press_in_chrome = !in_rect(mp, layout.grab_pose_viewport())
                 || in_rect(mp, layout.inspector)
                 || in_rect(mp, layout.editor_tab);
-
-            let preview_mode = app.grab_pose_editor.as_ref().map(|s| s.preview_mode).unwrap_or(false);
-            if !app.press_in_chrome && !preview_mode {
-                let mp2 = Vec2::new(mp.0, mp.1);
-                if let Some(axis) = app.grab_pose_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h)) {
-                    grab_pose_editor::begin_drag_snapshot(app);
-                    app.grab_pose_gizmo.begin_drag(axis, mp2, &app.camera, (win_w, win_h));
-                    app.gizmo_dragging = true;
-                    app.dragged = true;
-                }
-            }
         }
         ElementState::Released => {
             app.left_down = false;
-            if app.gizmo_dragging {
-                app.grab_pose_gizmo.end_drag();
-                app.gizmo_dragging = false;
-                grab_pose_editor::end_drag_commit(app);
-            }
             app.mouse_released.push(AMouseButton::Left);
             app.dragged = false;
         }
@@ -278,8 +253,10 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                 let mp2 = Vec2::new(mp.0, mp.1);
 
                 let model_list_area = layout.model_list_area(&theme);
-                let model_rects = layout.model_rects(&theme, app.available_models.len(), app.model_scroll_y);
-                let clicked_chip = model_rects.iter()
+                let model_rects =
+                    layout.model_rects(&theme, app.available_models.len(), app.model_scroll_y);
+                let clicked_chip = model_rects
+                    .iter()
                     .position(|r| in_rect(mp, *r) && in_rect(mp, model_list_area));
 
                 if let Some(i) = clicked_chip {
@@ -296,12 +273,16 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                     app.dragged = true;
                 } else {
                     let xform_hit = if !app.press_in_chrome && has_gizmo_target(app) {
-                        app.xform_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h))
+                        app.xform_gizmo
+                            .raycast_gizmo(mp2, &app.camera, (win_w, win_h))
                     } else {
                         None
                     };
 
-                    let marker_hit = if app.tool == EditorTool::Snap && !app.press_in_chrome && xform_hit.is_none() {
+                    let marker_hit = if app.tool == EditorTool::Snap
+                        && !app.press_in_chrome
+                        && xform_hit.is_none()
+                    {
                         let (o, d) = app.screen_ray(mp.0, mp.1, win_w, win_h);
                         snap::pick_joint_marker(&app.snap_joint_frame, o, d)
                     } else {
@@ -311,38 +292,44 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                     let gizmo = layout.gizmo_rects(&theme);
                     let gizmo_parts = [GizmoPart::Orbit, GizmoPart::Pan, GizmoPart::Zoom];
                     if let Some(axis) = xform_hit {
-                        app.xform_gizmo.begin_drag(axis, mp2, &app.camera, (win_w, win_h));
+                        app.xform_gizmo
+                            .begin_drag(axis, mp2, &app.camera, (win_w, win_h));
                         app.gizmo_dragging = true;
                         app.dragged = true;
                     } else if let Some(idx) = marker_hit {
                         app.snap_selected_joint = Some(idx);
                         if let Some(joint) = app.snap_joint_frame.get(idx) {
                             app.xform_gizmo.set_position(joint.current_pos);
-                            // Grabbing the marker itself (rather than a
-                            // rendered gizmo axis) has no single axis to
-                            // constrain to, so drag it freely in the
-                            // camera-facing plane; `apply_gizmo_drag_to_joint`
-                            // projects the result back onto the finger's
-                            // open->closed curl segment regardless.
-                            app.xform_gizmo.begin_drag(Axis::XYZ, mp2, &app.camera, (win_w, win_h));
+
+                            app.xform_gizmo
+                                .begin_drag(Axis::XYZ, mp2, &app.camera, (win_w, win_h));
                             app.gizmo_dragging = true;
                         }
                         app.dragged = true;
-                    } else if let Some((i, _)) = gizmo.iter().enumerate().find(|(_, r)| in_rect(mp, **r)) {
+                    } else if let Some((i, _)) =
+                        gizmo.iter().enumerate().find(|(_, r)| in_rect(mp, **r))
+                    {
                         app.gizmo_drag = Some(gizmo_parts[i]);
                         app.dragged = true;
                     } else if !app.press_in_chrome {
                         match app.tool {
                             EditorTool::Rigging => {
                                 if let Some(id) = app.pick_object(mp.0, mp.1, win_w, win_h) {
-                                    if let Some(pos) = app.rig_selection.iter().position(|s| s == &id) {
+                                    if let Some(pos) =
+                                        app.rig_selection.iter().position(|s| s == &id)
+                                    {
                                         app.rig_selection.remove(pos);
                                     } else {
                                         app.rig_selection.push(id);
                                         if app.rig_selection.len() == 2 {
                                             let object = app.rig_selection[0].clone();
                                             let hand = app.rig_selection[1].clone();
-                                            snap::seed_grip_pose(app.runtime.scene_mut(), &object, app.snap_hand, Some(&hand));
+                                            snap::seed_grip_pose(
+                                                app.runtime.scene_mut(),
+                                                &object,
+                                                app.snap_hand,
+                                                Some(&hand),
+                                            );
                                             app.scene_dirty = true;
                                             app.rig_selection.clear();
                                             app.selected_object = Some(object);
@@ -359,18 +346,26 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                             EditorTool::Select => {
                                 if let Some(id) = app.pick_object(mp.0, mp.1, win_w, win_h) {
                                     let now = std::time::Instant::now();
-                                    let is_double_click = app.last_clicked_object.as_deref() == Some(id.as_str())
-                                        && app.last_click_time
+                                    let is_double_click = app.last_clicked_object.as_deref()
+                                        == Some(id.as_str())
+                                        && app
+                                            .last_click_time
                                             .map(|t| now.duration_since(t).as_millis() < 400)
                                             .unwrap_or(false);
 
                                     if is_double_click {
-                                        let plane_y = app.runtime.scene().find_object(&id)
-                                            .map(|o| o.cuboid.position.y).unwrap_or(0.0);
+                                        let plane_y = app
+                                            .runtime
+                                            .scene()
+                                            .find_object(&id)
+                                            .map(|o| o.cuboid.position.y)
+                                            .unwrap_or(0.0);
                                         let (o, d) = app.screen_ray(mp.0, mp.1, win_w, win_h);
                                         let offset = ray_plane_intersect(o, d, plane_y)
                                             .and_then(|hit| {
-                                                app.runtime.scene().find_object(&id)
+                                                app.runtime
+                                                    .scene()
+                                                    .find_object(&id)
                                                     .map(|obj| obj.cuboid.position - hit)
                                             })
                                             .unwrap_or(Vec3::ZERO);
@@ -401,11 +396,16 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
             app.mouse_released.push(AMouseButton::Left);
 
             let was_moving = app.moving_object;
-            if app.moving_object { app.moving_object = false; }
+            if app.moving_object {
+                app.moving_object = false;
+            }
 
-            if app.view_mode == ViewMode::Edit && app.editing.is_none()
+            if app.view_mode == ViewMode::Edit
+                && app.editing.is_none()
                 && app.tool == EditorTool::Select
-                && !app.dragged && !was_moving && in_rect(mp, layout.center)
+                && !app.dragged
+                && !was_moving
+                && in_rect(mp, layout.center)
                 && !app.press_in_chrome
             {
                 app.selected_object = app.pick_object(mp.0, mp.1, win_w, win_h);
@@ -421,14 +421,20 @@ fn place_dropped_model(app: &mut App, model_path: &std::path::Path, pos: Vec3) {
     let rel = model_path.strip_prefix(&game_dir).unwrap_or(model_path);
     let rel_str = rel.to_string_lossy().replace('\\', "/");
 
-    let base = model_path.file_stem()
+    let base = model_path
+        .file_stem()
         .map(|s| s.to_string_lossy().to_string())
         .unwrap_or_else(|| "model".to_string());
 
     let scene = app.runtime.scene_mut();
     let id = unique_id(scene, &base);
     let half = Vec3::splat(0.25);
-    let obj = new_object(id.clone(), Vec3::new(pos.x, half.y, pos.z), half, Some(rel_str));
+    let obj = new_object(
+        id.clone(),
+        Vec3::new(pos.x, half.y, pos.z),
+        half,
+        Some(rel_str),
+    );
     scene.objects.push(obj);
     app.selected_object = Some(id);
     app.scene_dirty = true;
