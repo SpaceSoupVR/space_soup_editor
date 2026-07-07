@@ -1,3 +1,4 @@
+pub(crate) mod anim_sim_panel;
 pub(crate) mod grab_pose_panel;
 pub(crate) mod inspector;
 pub(crate) mod navigator;
@@ -16,6 +17,7 @@ use space_soup_engine::{InputFrame, LocomotionInput, PlayerRig};
 
 use agate::Theme;
 
+use super::anim_sim_editor;
 use super::grab_pose_editor;
 use super::layout::Layout;
 use super::snap;
@@ -25,6 +27,10 @@ impl super::App {
     pub(crate) fn redraw(&mut self) {
         if self.grab_pose_editor.is_some() {
             self.redraw_grab_pose();
+            return;
+        }
+        if self.anim_sim_editor.is_some() {
+            self.redraw_anim_sim();
             return;
         }
 
@@ -394,6 +400,7 @@ impl super::App {
         let mut scene_dirty = self.scene_dirty;
         let mut open_script_editor: Option<String> = None;
         let mut open_grab_pose_editor: Option<String> = None;
+        let mut open_anim_sim_editor: Option<String> = None;
         let game_dir_for_inspector = self.runtime.game_dir().to_path_buf();
         inspector::draw(
             ui,
@@ -407,6 +414,8 @@ impl super::App {
             &mut scene_dirty,
             &mut open_script_editor,
             &mut open_grab_pose_editor,
+            &mut open_anim_sim_editor,
+            &mut self.inspector_content_height,
             &packet,
         );
         self.scene_dirty = scene_dirty;
@@ -465,6 +474,9 @@ impl super::App {
         }
         if let Some(id) = open_grab_pose_editor {
             grab_pose_editor::open(self, id);
+        }
+        if let Some(id) = open_anim_sim_editor {
+            anim_sim_editor::open(self, id);
         }
 
         self.mouse_held = if self.left_down {
@@ -625,6 +637,248 @@ impl super::App {
         }
         if let Some(kind) = actions.set_kind {
             grab_pose_editor::set_active_point_kind(self, kind);
+        }
+    }
+
+    fn redraw_anim_sim(&mut self) {
+        let (win_w, win_h) = self.win_size();
+
+        let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
+            self.renderer.as_mut(),
+            self.surface.as_ref(),
+            self.overlay.as_mut(),
+            self.ui.as_mut(),
+        ) else {
+            return;
+        };
+
+        // Real dt so preview playback advances (about_to_wait drives redraws).
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f32();
+        self.last_tick = now;
+
+        // Load the object's mesh if it isn't cached yet.
+        let game_dir = self.runtime.game_dir().to_path_buf();
+        let object_mesh_path = self
+            .anim_sim_editor
+            .as_ref()
+            .and_then(|s| self.runtime.scene().find_object(&s.object_id))
+            .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
+        if let Some(path) = &object_mesh_path {
+            if !self.mesh_cache.contains_key(path) {
+                let full_path = game_dir.join(path);
+                match GltfMesh::load(
+                    &renderer.device,
+                    &renderer.queue,
+                    renderer.mesh_texture_layout(),
+                    &full_path,
+                ) {
+                    Ok(mesh) => {
+                        let model_uniform = renderer.create_model_uniform();
+                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
+                    }
+                    Err(e) => log::warn!(
+                        "space_soup_editor: anim sim editor failed to load '{path}': {e}"
+                    ),
+                }
+            }
+        }
+
+        let Some(state) = self.anim_sim_editor.as_ref() else {
+            return;
+        };
+        self.camera.position = state.orbit.eye_position();
+        self.camera.rotation = state.orbit.rotation();
+
+        anim_sim_editor::update_transforms(state, self.runtime.scene(), &mut self.mesh_cache);
+        let cuboids = anim_sim_editor::collect_cuboids(state, self.runtime.scene());
+        let mesh_instances =
+            anim_sim_editor::collect_mesh_instances(state, self.runtime.scene(), &self.mesh_cache);
+
+        let frame = match surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("surface error: {e}");
+                return;
+            }
+        };
+        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+
+        renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
+
+        let ui_input = agate::UiInput {
+            mouse_pos: self.mouse_pos,
+            mouse_held: std::mem::take(&mut self.mouse_held),
+            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
+            mouse_released: std::mem::take(&mut self.mouse_released),
+            scroll_y: std::mem::take(&mut self.scroll_y),
+            text: std::mem::take(&mut self.text_input),
+            keys: std::mem::take(&mut self.named_keys),
+            cmd: self.mods.super_key() || self.mods.control_key(),
+            shift: self.mods.shift_key(),
+            alt: self.mods.alt_key(),
+            dt,
+        };
+        ui.begin_frame(win_w, win_h, &ui_input);
+
+        let theme: Theme = ui.theme;
+        let layout = Layout::new(win_w, win_h, &theme);
+        ui.card_border(layout.anim_sim_viewport());
+
+        let has_anim_clipboard = self.anim_clipboard.is_some();
+        let has_key_clipboard = self.keyframe_clipboard.is_some();
+        let scene_ref = self.runtime.scene();
+        let Some(state) = self.anim_sim_editor.as_mut() else {
+            return;
+        };
+        let actions = anim_sim_panel::draw(
+            ui,
+            &theme,
+            &layout,
+            state,
+            scene_ref,
+            has_anim_clipboard,
+            has_key_clipboard,
+        );
+
+        overlay.set_items(ui.finish());
+
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("overlay_enc"),
+            });
+        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
+        renderer.queue.submit(Some(encoder.finish()));
+        frame.present();
+
+        self.mouse_held = if self.left_down {
+            vec![agate::AMouseButton::Left]
+        } else {
+            vec![]
+        };
+
+        // Advance the preview after drawing (uses this frame's dt).
+        anim_sim_editor::update_playback(self, dt);
+
+        self.apply_anim_sim_actions(actions);
+    }
+
+    fn apply_anim_sim_actions(&mut self, actions: anim_sim_panel::AnimSimPanelActions) {
+        use space_soup_engine::BINDING_BUTTONS;
+
+        if actions.close {
+            anim_sim_editor::close(self);
+            return;
+        }
+        if actions.undo {
+            anim_sim_editor::undo(self);
+        }
+        if actions.redo {
+            anim_sim_editor::redo(self);
+        }
+
+        if let Some(i) = actions.select_anim {
+            anim_sim_editor::select_anim(self, i);
+        }
+        if actions.add_anim {
+            anim_sim_editor::add_anim(self);
+        }
+        if actions.delete_anim {
+            anim_sim_editor::delete_anim(self);
+        }
+        if let Some(name) = actions.rename_anim {
+            anim_sim_editor::rename_anim(self, name);
+        }
+        if let Some(v) = actions.set_looping {
+            anim_sim_editor::set_looping(self, v);
+        }
+        if let Some(e) = actions.set_easing {
+            anim_sim_editor::set_easing(self, e);
+        }
+        if actions.copy_anim {
+            anim_sim_editor::copy_anim(self);
+        }
+        if actions.paste_anim {
+            anim_sim_editor::paste_anim(self);
+        }
+
+        if actions.play {
+            anim_sim_editor::play(self);
+        }
+        if actions.pause {
+            anim_sim_editor::pause(self);
+        }
+        if actions.stop {
+            anim_sim_editor::stop(self);
+        }
+        if let Some(v) = actions.seek {
+            anim_sim_editor::seek(self, v);
+        }
+
+        if let Some(i) = actions.select_key {
+            anim_sim_editor::select_key(self, i);
+        }
+        if actions.add_key {
+            anim_sim_editor::add_key_at_playhead(self);
+        }
+        if actions.capture_pose {
+            anim_sim_editor::capture_pose_key(self);
+        }
+        if actions.delete_key {
+            anim_sim_editor::delete_key(self);
+        }
+        if actions.copy_key {
+            anim_sim_editor::copy_key(self);
+        }
+        if actions.paste_key {
+            anim_sim_editor::paste_key(self);
+        }
+        if let Some((field, value)) = actions.key_field_edit {
+            anim_sim_editor::edit_key_field(self, field, value);
+        }
+        if let Some(ch) = actions.toggle_channel {
+            anim_sim_editor::toggle_key_channel(self, ch);
+        }
+
+        if actions.add_binding {
+            anim_sim_editor::add_binding(self);
+        }
+        if let Some(i) = actions.remove_binding {
+            anim_sim_editor::remove_binding(self, i);
+        }
+        if let Some(i) = actions.cycle_binding_button {
+            anim_sim_editor::edit_binding(self, i, |b| {
+                let cur = BINDING_BUTTONS
+                    .iter()
+                    .position(|id| *id == b.button)
+                    .unwrap_or(0);
+                b.button = BINDING_BUTTONS[(cur + 1) % BINDING_BUTTONS.len()].to_string();
+            });
+        }
+        if let Some(i) = actions.cycle_binding_anim {
+            let names: Vec<String> = self
+                .anim_sim_editor
+                .as_ref()
+                .and_then(|s| self.runtime.scene().find_object(&s.object_id))
+                .map(|o| o.animations.iter().map(|a| a.name.clone()).collect())
+                .unwrap_or_default();
+            if !names.is_empty() {
+                anim_sim_editor::edit_binding(self, i, |b| {
+                    let cur = names.iter().position(|n| *n == b.animation);
+                    let next = match cur {
+                        Some(c) => (c + 1) % names.len(),
+                        None => 0,
+                    };
+                    b.animation = names[next].clone();
+                });
+            }
+        }
+        if let Some((i, mode)) = actions.binding_mode {
+            anim_sim_editor::edit_binding(self, i, |b| b.play_mode = mode);
+        }
+        if let Some((i, scope)) = actions.binding_scope {
+            anim_sim_editor::edit_binding(self, i, |b| b.scope = scope);
         }
     }
 }

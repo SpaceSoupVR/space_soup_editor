@@ -34,6 +34,7 @@ pub(crate) fn new_object(
         hidden: false,
         script: None,
         animations: Vec::new(),
+        animation_bindings: Vec::new(),
         rig_attachment: None,
         grip_pose_legacy: None,
         grip_pose_left: None,
