@@ -3,6 +3,7 @@ use winit::keyboard::{Key, NamedKey};
 
 use crate::transform_gizmo::GizmoMode;
 
+use super::super::anim_sim_editor;
 use super::super::discover::winit_key_to_agate;
 use super::super::grab_pose_editor;
 use super::super::snap;
@@ -11,6 +12,10 @@ use super::super::{App, EditorTool};
 pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     if app.grab_pose_editor.is_some() {
         grab_pose_key(app, event);
+        return;
+    }
+    if app.anim_sim_editor.is_some() {
+        anim_sim_key(app, event);
         return;
     }
 
@@ -67,6 +72,74 @@ fn grab_pose_key(app: &mut App, ev: &KeyEvent) {
             _ => {}
         },
         _ => {}
+    }
+    app.redraw_now();
+}
+
+fn anim_sim_key(app: &mut App, ev: &KeyEvent) {
+    let cmd = app.mods.super_key() || app.mods.control_key();
+    let shift = app.mods.shift_key();
+    let text_focused = app
+        .ui
+        .as_ref()
+        .map(|u| u.text_focused())
+        .unwrap_or(false);
+
+    // Cmd-chords work even while typing. (No Esc-to-close: too easy to lose
+    // your place by accident — use the Done button.)
+    match &ev.logical_key {
+        Key::Character(s) if cmd => {
+            match s.as_str() {
+                "z" | "Z" => {
+                    if shift {
+                        anim_sim_editor::redo(app);
+                    } else {
+                        anim_sim_editor::undo(app);
+                    }
+                }
+                "c" | "C" if !text_focused => anim_sim_editor::copy_key(app),
+                "v" | "V" if !text_focused => anim_sim_editor::paste_key(app),
+                _ => {}
+            }
+            app.redraw_now();
+            return;
+        }
+        _ => {}
+    }
+
+    if text_focused {
+        // Route typing into the focused panel text input.
+        if !cmd {
+            if let Some(txt) = &ev.text {
+                for ch in txt.chars() {
+                    if !ch.is_control() {
+                        app.text_input.push(ch);
+                    }
+                }
+            }
+        }
+        if let Some(nk) = winit_key_to_agate(&ev.logical_key) {
+            app.named_keys.push(nk);
+        }
+    } else if !cmd {
+        // Single-key hotkeys.
+        match &ev.logical_key {
+            Key::Named(NamedKey::Space) => {
+                if !ev.repeat {
+                    anim_sim_editor::toggle_play(app);
+                }
+            }
+            Key::Named(NamedKey::Delete) | Key::Named(NamedKey::Backspace) => {
+                anim_sim_editor::delete_key(app);
+            }
+            Key::Named(NamedKey::ArrowLeft) => anim_sim_editor::step_playhead(app, -1.0),
+            Key::Named(NamedKey::ArrowRight) => anim_sim_editor::step_playhead(app, 1.0),
+            Key::Character(s) => match s.as_str() {
+                "k" | "K" => anim_sim_editor::add_key_at_playhead(app),
+                _ => {}
+            },
+            _ => {}
+        }
     }
     app.redraw_now();
 }

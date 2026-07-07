@@ -1,3 +1,4 @@
+pub(crate) mod anim_sim_editor;
 pub(crate) mod discover;
 pub(crate) mod edit_camera;
 pub(crate) mod grab_pose_editor;
@@ -124,6 +125,10 @@ pub(crate) struct App {
     pub(crate) nav_scenes_open: bool,
     pub(crate) nav_objects_open: bool,
 
+    /// Measured height of the inspector's object cards; drives its scrollbar
+    /// so short windows can still reach the bottom buttons.
+    pub(crate) inspector_content_height: f32,
+
     pub(crate) files_discovered: Vec<PathBuf>,
     pub(crate) available_models: Vec<PathBuf>,
 
@@ -135,6 +140,12 @@ pub(crate) struct App {
 
     pub(crate) grab_pose_editor: Option<grab_pose_editor::GrabPoseEditorState>,
     pub(crate) grab_pose_gizmo: TransformGizmo,
+
+    pub(crate) anim_sim_editor: Option<anim_sim_editor::AnimSimEditorState>,
+    /// Cross-object clipboards so animations/keyframes survive closing and
+    /// reopening the anim-sim editor on another object.
+    pub(crate) anim_clipboard: Option<space_soup_engine::Animation>,
+    pub(crate) keyframe_clipboard: Option<space_soup_engine::Keyframe>,
 }
 
 impl App {
@@ -204,6 +215,8 @@ impl App {
             nav_scenes_open: true,
             nav_objects_open: true,
 
+            inspector_content_height: 900.0,
+
             files_discovered: files,
             available_models: models,
 
@@ -215,6 +228,10 @@ impl App {
 
             grab_pose_editor: None,
             grab_pose_gizmo: TransformGizmo::new(),
+
+            anim_sim_editor: None,
+            anim_clipboard: None,
+            keyframe_clipboard: None,
         }
     }
 
