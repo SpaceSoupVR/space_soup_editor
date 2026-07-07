@@ -32,6 +32,10 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
         grab_pose_cursor_moved(app, new, dx, dy);
         return;
     }
+    if app.anim_sim_editor.is_some() {
+        anim_sim_cursor_moved(app, dx, dy);
+        return;
+    }
 
     let mouse_vec2 = Vec2::new(new.0, new.1);
     let viewport = app.win_size();
@@ -195,6 +199,44 @@ fn grab_pose_cursor_moved(app: &mut App, _new: (f32, f32), dx: f32, dy: f32) {
     app.redraw_now();
 }
 
+fn anim_sim_cursor_moved(app: &mut App, dx: f32, dy: f32) {
+    if app.left_down && !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
+        app.dragged = true;
+        if let Some(state) = app.anim_sim_editor.as_mut() {
+            state.orbit.orbit(dx, dy);
+        }
+    }
+    app.redraw_now();
+}
+
+fn anim_sim_left_button(app: &mut App, state: ElementState) {
+    let (win_w, win_h) = app.win_size();
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+    let mp = app.mouse_pos;
+
+    match state {
+        ElementState::Pressed => {
+            app.left_down = true;
+            app.dragged = false;
+            app.gizmo_drag = None;
+            app.gizmo_dragging = false;
+            app.mouse_pressed.push(AMouseButton::Left);
+            app.mouse_held.push(AMouseButton::Left);
+
+            app.press_in_chrome = !in_rect(mp, layout.anim_sim_viewport())
+                || in_rect(mp, layout.inspector)
+                || in_rect(mp, layout.editor_tab);
+        }
+        ElementState::Released => {
+            app.left_down = false;
+            app.mouse_released.push(AMouseButton::Left);
+            app.dragged = false;
+        }
+    }
+    app.redraw_now();
+}
+
 fn grab_pose_left_button(app: &mut App, state: ElementState) {
     let (win_w, win_h) = app.win_size();
     let theme = Theme::new(app.scale);
@@ -226,6 +268,10 @@ fn grab_pose_left_button(app: &mut App, state: ElementState) {
 pub(crate) fn left_button(app: &mut App, state: ElementState) {
     if app.grab_pose_editor.is_some() {
         grab_pose_left_button(app, state);
+        return;
+    }
+    if app.anim_sim_editor.is_some() {
+        anim_sim_left_button(app, state);
         return;
     }
 

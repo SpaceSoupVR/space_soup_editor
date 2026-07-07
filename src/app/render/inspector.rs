@@ -24,6 +24,8 @@ pub(crate) fn draw(
     scene_dirty: &mut bool,
     open_script_editor: &mut Option<String>,
     open_grab_pose_editor: &mut Option<String>,
+    open_anim_sim_editor: &mut Option<String>,
+    content_height: &mut f32,
     _packet: &space_soup_engine::DebugPacket,
 ) {
     ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
@@ -37,18 +39,10 @@ pub(crate) fn draw(
         None => "INSPECTOR",
     };
     let clip_ins = layout.inspector;
-    ui.label_styled(
-        ix + theme.px(PAD),
-        iy + theme.px(12.0),
-        hdr,
-        theme.small(),
-        t::TEXT_SECONDARY,
-        iw,
-        Some(clip_ins),
-    );
     let body_top = iy + theme.px(ROW_H + 10.0);
 
     if editing.is_some() {
+        draw_header(ui, theme, ix, iy, iw, hdr, clip_ins);
         draw_editor_info(ui, theme, ix, iw, body_top, clip_ins, editor, editing);
         return;
     }
@@ -57,23 +51,44 @@ pub(crate) fn draw(
         .clone()
         .filter(|id| scene.find_object(id).is_some());
     match sel_id {
-        Some(id) => draw_object_cards(
-            ui,
-            theme,
-            layout,
-            ix,
-            iw,
-            body_top,
-            clip_ins,
-            scene,
-            game_dir,
-            &id,
-            selected_object,
-            scene_dirty,
-            open_script_editor,
-            open_grab_pose_editor,
-        ),
+        Some(id) => {
+            // The cards are taller than the panel in small windows — scroll
+            // them so the bottom buttons stay reachable instead of being
+            // clipped at the panel edge.
+            let scroll_id = WidgetId::of("inspector_scroll");
+            let (_, scroll_y) = ui.scroll_area(scroll_id, layout.inspector, *content_height);
+            ui.label_styled(
+                ix + theme.px(PAD),
+                iy + theme.px(12.0) - scroll_y,
+                hdr,
+                theme.small(),
+                t::TEXT_SECONDARY,
+                iw,
+                Some(clip_ins),
+            );
+            let bottom_y = draw_object_cards(
+                ui,
+                theme,
+                layout,
+                ix,
+                iw,
+                body_top - scroll_y,
+                clip_ins,
+                scene,
+                game_dir,
+                &id,
+                selected_object,
+                scene_dirty,
+                open_script_editor,
+                open_grab_pose_editor,
+                open_anim_sim_editor,
+            );
+            let ch = (bottom_y + scroll_y) - iy + theme.px(12.0);
+            ui.end_scroll_area(scroll_id, layout.inspector, ch);
+            *content_height = ch;
+        }
         None => {
+            draw_header(ui, theme, ix, iy, iw, hdr, clip_ins);
             ui.label_styled(
                 ix + theme.px(PAD),
                 body_top,
@@ -94,6 +109,27 @@ pub(crate) fn draw(
             );
         }
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn draw_header(
+    ui: &mut Ui,
+    theme: &Theme,
+    ix: f32,
+    iy: f32,
+    iw: f32,
+    hdr: &str,
+    clip_ins: [f32; 4],
+) {
+    ui.label_styled(
+        ix + theme.px(PAD),
+        iy + theme.px(12.0),
+        hdr,
+        theme.small(),
+        t::TEXT_SECONDARY,
+        iw,
+        Some(clip_ins),
+    );
 }
 
 fn draw_editor_info(
@@ -144,7 +180,8 @@ fn draw_object_cards(
     scene_dirty: &mut bool,
     open_script_editor: &mut Option<String>,
     open_grab_pose_editor: &mut Option<String>,
-) {
+    open_anim_sim_editor: &mut Option<String>,
+) -> f32 {
     let cards = layout.inspector_cards(theme, body_top);
 
     let (obj_position, obj_half_size, obj_rotation, obj_color, has_script, has_mesh) = {
@@ -374,6 +411,10 @@ fn draw_object_cards(
         *open_grab_pose_editor = Some(id.to_string());
     }
 
+    if ui.button_secondary(cards.btn_anim_sim, "Simulate Animations") {
+        *open_anim_sim_editor = Some(id.to_string());
+    }
+
     if ui.button_secondary(cards.btn_dup, "Duplicate") {
         if let Some(src) = scene.find_object(id).cloned() {
             let mut copy = src;
@@ -401,6 +442,8 @@ fn draw_object_cards(
         iw - theme.px(PAD * 2.0),
         Some(clip_ins),
     );
+
+    hint_y + theme.px(20.0)
 }
 
 fn default_script_stub(id: &str) -> String {

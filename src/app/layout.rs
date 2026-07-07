@@ -293,7 +293,10 @@ impl Layout {
         let grab_pose_y = script_y + theme.px(30.0) + cg;
         let btn_grab_pose = rect_from(cx, grab_pose_y, cw, theme.px(30.0));
 
-        let act_y = grab_pose_y + theme.px(30.0) + cg;
+        let anim_sim_y = grab_pose_y + theme.px(30.0) + cg;
+        let btn_anim_sim = rect_from(cx, anim_sim_y, cw, theme.px(30.0));
+
+        let act_y = anim_sim_y + theme.px(30.0) + cg;
         let bw = (cw - theme.px(8.0)) * 0.5;
         let btn_dup = rect_from(cx, act_y, bw, theme.px(30.0));
         let btn_del = rect_from(cx + bw + theme.px(8.0), act_y, bw, theme.px(30.0));
@@ -311,10 +314,17 @@ impl Layout {
             btn_voxelize,
             btn_script,
             btn_grab_pose,
+            btn_anim_sim,
             btn_dup,
             btn_del,
             bottom_y: act_y + theme.px(30.0),
         }
+    }
+
+    /// The anim-sim editor reuses the same full-width 3D viewport as the
+    /// grab pose editor (navigator through center, inspector stays a panel).
+    pub fn anim_sim_viewport(&self) -> Rect {
+        self.grab_pose_viewport()
     }
 }
 
@@ -331,6 +341,7 @@ pub(crate) struct InspectorCards {
     pub btn_voxelize: Rect,
     pub btn_script: Rect,
     pub btn_grab_pose: Rect,
+    pub btn_anim_sim: Rect,
     pub btn_dup: Rect,
     pub btn_del: Rect,
     pub bottom_y: f32,

@@ -211,7 +211,9 @@ pub(crate) fn draw(
     let rot_deg = active
         .map(|p| {
             let q = Quat::from_array(p.local_rot);
-            let (ex, ey, ez) = q.to_euler(EulerRot::YXZ);
+            // glam returns YXZ euler in (Y, X, Z) order — display it axis-indexed
+            // as [X, Y, Z] to match apply_field_edit's Rot handling.
+            let (ey, ex, ez) = q.to_euler(EulerRot::YXZ);
             [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()]
         })
         .unwrap_or([0.0; 3]);

@@ -11,6 +11,16 @@ use crate::transform_gizmo::{GizmoMode, TransformGizmo};
 use super::snap::{compute_skin_matrices, hand_glb_path};
 use super::App;
 
+/// Cache key for the grab-pose editor's own copy of a hand mesh. Distinct from
+/// the raw `hand_glb_path` key so we always hold a *skinned* instance (with a
+/// joint bind group). The main scene view preloads the same GLB under its raw
+/// path as a plain, unskinned mesh (setup.rs); reusing that entry would give the
+/// grab-pose hand no joint bind group, and the renderer draws such a mesh in
+/// neither pass — i.e. it would be invisible.
+fn hand_cache_key(hand: Hand) -> String {
+    format!("__grabpose_skinned__/{}", hand_glb_path(hand))
+}
+
 fn identity_quat_arr() -> [f32; 4] {
     Quat::IDENTITY.to_array()
 }
@@ -172,11 +182,11 @@ pub(crate) fn ensure_hand_meshes_loaded(
     game_dir: &std::path::Path,
 ) {
     for hand in [Hand::Left, Hand::Right] {
-        let path = hand_glb_path(hand);
-        if mesh_cache.contains_key(path) {
+        let key = hand_cache_key(hand);
+        if mesh_cache.contains_key(&key) {
             continue;
         }
-        let full_path = game_dir.join(path);
+        let full_path = game_dir.join(hand_glb_path(hand));
         match GltfMesh::load(
             &renderer.device,
             &renderer.queue,
@@ -186,9 +196,12 @@ pub(crate) fn ensure_hand_meshes_loaded(
             Ok(mut mesh) => {
                 mesh.create_skin_bind_group(&renderer.device, renderer.skin_joint_layout());
                 let model_uniform = renderer.create_skinned_model_uniform();
-                mesh_cache.insert(path.to_string(), (mesh, model_uniform));
+                mesh_cache.insert(key, (mesh, model_uniform));
             }
-            Err(e) => log::warn!("space_soup_editor: grab pose editor couldn't load {path}: {e}"),
+            Err(e) => log::warn!(
+                "space_soup_editor: grab pose editor couldn't load {}: {e}",
+                full_path.display()
+            ),
         }
     }
 }
@@ -216,20 +229,24 @@ pub(crate) fn update_transforms(
     let Some(point) = obj.grip_points.get(state.active_point) else {
         return;
     };
-    let hand_path = hand_glb_path(state.preview_hand);
-    if let Some((mesh, _)) = mesh_cache.get(hand_path) {
+    let hand_key = hand_cache_key(state.preview_hand);
+    // The hand's world placement (grip root + preview scale) is baked entirely
+    // into the joint matrices below. The skinned shader computes
+    // `world = model * (joints * pos)`, so the mesh's own model matrix MUST stay
+    // identity — otherwise `root` is applied twice and the hand is flung off the
+    // grip point (which is why it looked like the hand wasn't rendering at all).
+    let root = point_root(reference, point)
+        * Mat4::from_scale(Vec3::from(point.hand_offset_scale));
+    if let Some((mesh, _)) = mesh_cache.get(&hand_key) {
         if let Some(skin) = &mesh.skin {
-            let root = point_root(reference, point);
             let mats = compute_skin_matrices(skin, root, &point.finger_curl);
             skin.update_joint_matrices(queue, &mats);
         }
     }
-    if let Some((mesh, _)) = mesh_cache.get_mut(hand_path) {
-        let root = point_root(reference, point);
-        let (_, rot, pos) = root.to_scale_rotation_translation();
-        mesh.position = pos;
-        mesh.rotation = rot;
-        mesh.scale = Vec3::from(point.hand_offset_scale);
+    if let Some((mesh, _)) = mesh_cache.get_mut(&hand_key) {
+        mesh.position = Vec3::ZERO;
+        mesh.rotation = Quat::IDENTITY;
+        mesh.scale = Vec3::ONE;
     }
 }
 
@@ -267,15 +284,14 @@ pub(crate) fn collect_cuboids(state: &GrabPoseEditorState, scene: &Scene) -> Vec
     }
 
     for (i, point) in obj.grip_points.iter().enumerate() {
-        let active = i == state.active_point;
+        // The active point shows the posed hand instead of a marker cube — only
+        // the other (unselected) points get a cube so they stay visible/pickable.
+        if i == state.active_point {
+            continue;
+        }
         let root = point_root(reference, point);
         let (_, rot, pos) = root.to_scale_rotation_translation();
-        let half = if active {
-            MARKER_HALF * 1.6
-        } else {
-            MARKER_HALF
-        };
-        let mut c = Cuboid::solid(pos, Vec3::splat(half), marker_color(point.kind, active));
+        let mut c = Cuboid::solid(pos, Vec3::splat(MARKER_HALF), marker_color(point.kind, false));
         c.rotation = rot;
         out.push(c);
     }
@@ -300,7 +316,7 @@ pub(crate) fn collect_mesh_instances<'a>(
     }
 
     if obj.grip_points.get(state.active_point).is_some() {
-        if let Some((mesh, model)) = mesh_cache.get(hand_glb_path(state.preview_hand)) {
+        if let Some((mesh, model)) = mesh_cache.get(&hand_cache_key(state.preview_hand)) {
             out.push(MeshInstance { mesh, model });
         }
     }
@@ -646,14 +662,17 @@ pub(crate) fn apply_field_edit(app: &mut App, field: PoseField, value: f32) {
                 PoseField::Pos(i) => point.local_pos[i] = value,
                 PoseField::Rot(i) => {
                     let q = Quat::from_array(point.local_rot);
-                    let (ex, ey, ez) = q.to_euler(EulerRot::YXZ);
+                    // glam returns YXZ euler in (Y, X, Z) order — store it
+                    // axis-indexed as [X, Y, Z] so field i maps to one stable
+                    // axis (otherwise editing X also drags Y).
+                    let (ey, ex, ez) = q.to_euler(EulerRot::YXZ);
                     let mut deg = [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()];
                     deg[i] = value;
                     let nq = Quat::from_euler(
                         EulerRot::YXZ,
-                        deg[1].to_radians(),
-                        deg[0].to_radians(),
-                        deg[2].to_radians(),
+                        deg[1].to_radians(), // Y
+                        deg[0].to_radians(), // X
+                        deg[2].to_radians(), // Z
                     );
                     point.local_rot = nq.to_array();
                 }
