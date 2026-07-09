@@ -1,6 +1,12 @@
+use std::collections::HashMap;
+
 use glam::{Quat, Vec3};
 
-use space_soup::renderer::{Camera, Color3, Cuboid, MeshInstance};
+use space_soup::renderer::mesh_pipeline::ModelUniform;
+use space_soup::renderer::{
+    billboard_rotation, Camera, Color3, Cuboid, GltfMesh, IconAssets, IconKind, MeshInstance,
+    Renderer,
+};
 use space_soup_engine::{DebugPacket, GameObject, RenderCuboid};
 
 use crate::scene_3d;
@@ -75,6 +81,49 @@ pub(crate) fn build_cuboids(
         }
     }
     cuboids
+}
+
+/// Camera-facing billboard markers for objects that have no mesh/cuboid body
+/// of their own to click on — lights and sound sources. Each object gets its
+/// own persistent `(GltfMesh, ModelUniform)` cache entry keyed by object id
+/// (not by the shared icon texture path) so independent instances don't
+/// clobber each other's transform, same reasoning as the model mesh cache.
+pub(crate) fn collect_icon_instances<'a>(
+    icon_assets: &Option<IconAssets>,
+    icon_mesh_cache: &'a mut HashMap<String, (GltfMesh, ModelUniform)>,
+    renderer: &Renderer,
+    camera: &Camera,
+    objects: &[GameObject],
+) -> Vec<MeshInstance<'a>> {
+    let Some(icon_assets) = icon_assets else {
+        return Vec::new();
+    };
+
+    // `hidden` only suppresses a cuboid/mesh body — light/sound markers are
+    // created hidden precisely so the icon is their only visible body.
+    let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    for obj in objects {
+        let kind = if obj.light.is_some() {
+            IconKind::Light
+        } else if obj.sound.is_some() {
+            IconKind::Sound
+        } else {
+            continue;
+        };
+        seen.insert(obj.id.as_str());
+
+        let (mesh, _) = icon_mesh_cache
+            .entry(obj.id.clone())
+            .or_insert_with(|| (icon_assets.mesh_for(kind), renderer.create_model_uniform()));
+        mesh.position = obj.cuboid.position;
+        mesh.rotation = billboard_rotation(camera.rotation);
+    }
+    icon_mesh_cache.retain(|id, _| seen.contains(id.as_str()));
+
+    icon_mesh_cache
+        .values()
+        .map(|(mesh, model)| MeshInstance { mesh, model })
+        .collect()
 }
 
 #[allow(clippy::too_many_arguments)]

@@ -92,6 +92,7 @@ impl App {
         }
 
         self.gizmo_assets = Some(GizmoAssets::load(&renderer));
+        self.icon_assets = Some(renderer.create_icon_assets());
 
         let hand_path = self.runtime.game_dir().join("models/hand.glb");
         for (i, x) in [-0.5_f32, 0.5_f32].into_iter().enumerate() {
