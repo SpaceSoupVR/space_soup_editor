@@ -5,6 +5,7 @@ pub(crate) mod grab_pose_editor;
 pub(crate) mod input;
 pub(crate) mod layout;
 pub(crate) mod nav;
+pub(crate) mod object_preview;
 pub(crate) mod orbit_camera;
 pub(crate) mod picking;
 pub(crate) mod render;
@@ -22,7 +23,7 @@ use winit::keyboard::ModifiersState;
 use winit::window::Window;
 
 use space_soup::renderer::mesh_pipeline::ModelUniform;
-use space_soup::renderer::{Camera, GltfMesh, Renderer};
+use space_soup::renderer::{Camera, GltfMesh, IconAssets, Renderer};
 use space_soup::ui2d::Overlay;
 use space_soup_engine::{GameRuntime, Hand};
 
@@ -62,6 +63,19 @@ pub(crate) enum EditTarget {
     ObjectScript(String),
 }
 
+/// What's being dragged out of the viewport palette — a file-backed model, or
+/// one of the two fixed non-visual primitives (light / sound source).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum NewObjectSource {
+    Model(PathBuf),
+    Light,
+    Sound,
+}
+
+/// The two fixed non-file-backed palette entries ("Light", "Sound"), always
+/// shown first in the model tray, ahead of the file-backed model chips.
+pub(crate) const PRIMITIVE_PALETTE_COUNT: usize = 2;
+
 pub(crate) struct App {
     pub(crate) window: Option<Arc<Window>>,
     pub(crate) instance: Instance,
@@ -93,6 +107,8 @@ pub(crate) struct App {
     pub(crate) mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
     pub(crate) mesh_base_half_size: HashMap<String, glam::Vec3>,
     pub(crate) debug_meshes: Vec<(GltfMesh, ModelUniform)>,
+    pub(crate) icon_assets: Option<IconAssets>,
+    pub(crate) icon_mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
 
     pub(crate) view_mode: ViewMode,
     pub(crate) edit_camera: EditCamera,
@@ -103,7 +119,7 @@ pub(crate) struct App {
     pub(crate) move_anchor_offset: glam::Vec3,
     pub(crate) last_click_time: Option<Instant>,
     pub(crate) last_clicked_object: Option<String>,
-    pub(crate) dragging_new_model: Option<PathBuf>,
+    pub(crate) dragging_new_object: Option<NewObjectSource>,
     pub(crate) ghost_preview: Option<glam::Vec3>,
     pub(crate) gizmo_drag: Option<GizmoPart>,
     pub(crate) press_in_chrome: bool,
@@ -146,6 +162,8 @@ pub(crate) struct App {
     /// reopening the anim-sim editor on another object.
     pub(crate) anim_clipboard: Option<space_soup_engine::Animation>,
     pub(crate) keyframe_clipboard: Option<space_soup_engine::Keyframe>,
+
+    pub(crate) object_preview: Option<object_preview::ObjectPreviewState>,
 }
 
 impl App {
@@ -183,6 +201,8 @@ impl App {
             mesh_cache: HashMap::new(),
             mesh_base_half_size: HashMap::new(),
             debug_meshes: Vec::new(),
+            icon_assets: None,
+            icon_mesh_cache: HashMap::new(),
 
             view_mode: ViewMode::PlayerView,
             edit_camera: EditCamera::new(glam::Vec3::new(0.0, 1.2, 0.0)),
@@ -193,7 +213,7 @@ impl App {
             move_anchor_offset: glam::Vec3::ZERO,
             last_click_time: None,
             last_clicked_object: None,
-            dragging_new_model: None,
+            dragging_new_object: None,
             ghost_preview: None,
             gizmo_drag: None,
             press_in_chrome: false,
@@ -232,6 +252,8 @@ impl App {
             anim_sim_editor: None,
             anim_clipboard: None,
             keyframe_clipboard: None,
+
+            object_preview: None,
         }
     }
 

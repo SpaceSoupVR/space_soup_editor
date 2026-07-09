@@ -2,6 +2,7 @@ pub(crate) mod anim_sim_panel;
 pub(crate) mod grab_pose_panel;
 pub(crate) mod inspector;
 pub(crate) mod navigator;
+pub(crate) mod object_preview_panel;
 pub(crate) mod scene;
 pub(crate) mod statusbar;
 pub(crate) mod toolbar;
@@ -17,9 +18,12 @@ use space_soup_engine::{InputFrame, LocomotionInput, PlayerRig};
 
 use agate::Theme;
 
+use crate::transform_gizmo::GizmoMode;
+
 use super::anim_sim_editor;
 use super::grab_pose_editor;
 use super::layout::Layout;
+use super::object_preview;
 use super::snap;
 use super::{EditTarget, EditorTool, ViewMode};
 
@@ -31,6 +35,10 @@ impl super::App {
         }
         if self.anim_sim_editor.is_some() {
             self.redraw_anim_sim();
+            return;
+        }
+        if self.object_preview.is_some() {
+            self.redraw_object_preview();
             return;
         }
 
@@ -50,18 +58,19 @@ impl super::App {
         let dt = now.duration_since(self.last_tick).as_secs_f32();
         self.last_tick = now;
 
-        let (render_cuboids, render_meshes, scene_change) = if self.view_mode == ViewMode::Edit {
-            let (c, m) = self.runtime.render_lists();
-            (c, m, None)
-        } else {
-            self.runtime.update(
-                dt,
-                &InputFrame::default(),
-                PlayerRig::new(),
-                &LocomotionInput::default(),
-                None,
-            )
-        };
+        let (render_cuboids, render_meshes, render_lights, scene_change) =
+            if self.view_mode == ViewMode::Edit {
+                let (c, m, l) = self.runtime.render_lists();
+                (c, m, l, None)
+            } else {
+                self.runtime.update(
+                    dt,
+                    &InputFrame::default(),
+                    PlayerRig::new(),
+                    &LocomotionInput::default(),
+                    None,
+                )
+            };
 
         if let Some(next) = scene_change {
             if let Err(e) = self.runtime.load_scene(&next) {
@@ -194,7 +203,7 @@ impl super::App {
             &self.runtime.scene().objects,
             selected_id.as_deref(),
             self.view_mode == ViewMode::Edit,
-            self.dragging_new_model.is_some(),
+            self.dragging_new_object.is_some(),
             self.ghost_preview,
         );
 
@@ -279,7 +288,19 @@ impl super::App {
             ));
         }
 
-        renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
+        if self.view_mode == ViewMode::Edit && !editor_view_mode {
+            mesh_instances.extend(scene::collect_icon_instances(
+                &self.icon_assets,
+                &mut self.icon_mesh_cache,
+                renderer,
+                &self.camera,
+                &self.runtime.scene().objects,
+            ));
+        }
+
+        let lights: Vec<space_soup::renderer::Light> =
+            render_lights.iter().map(crate::app::scene_bridge::to_render_light).collect();
+        renderer.render_with_lights(&view, &self.camera, &cuboids, &mesh_instances, &lights);
 
         let ui_input = agate::UiInput {
             mouse_pos: self.mouse_pos,
@@ -375,7 +396,7 @@ impl super::App {
                 &theme,
                 &layout,
                 &self.available_models,
-                &self.dragging_new_model,
+                &self.dragging_new_object,
                 &mut self.model_scroll_y,
                 self.gizmo_drag,
                 self.xform_gizmo.mode,
@@ -401,6 +422,8 @@ impl super::App {
         let mut open_script_editor: Option<String> = None;
         let mut open_grab_pose_editor: Option<String> = None;
         let mut open_anim_sim_editor: Option<String> = None;
+        let mut open_object_preview: Option<String> = None;
+        let mut preview_sound: Option<(String, f32, f32)> = None;
         let game_dir_for_inspector = self.runtime.game_dir().to_path_buf();
         inspector::draw(
             ui,
@@ -415,10 +438,15 @@ impl super::App {
             &mut open_script_editor,
             &mut open_grab_pose_editor,
             &mut open_anim_sim_editor,
+            &mut open_object_preview,
+            &mut preview_sound,
             &mut self.inspector_content_height,
             &packet,
         );
         self.scene_dirty = scene_dirty;
+        if let Some((clip, volume, pitch)) = preview_sound {
+            self.runtime.preview_sound(&clip, volume, pitch);
+        }
 
         if let Some(id) = open_script_editor {
             let text = crate::app::scene_bridge::object_script(self.runtime.scene(), &id);
@@ -477,6 +505,9 @@ impl super::App {
         }
         if let Some(id) = open_anim_sim_editor {
             anim_sim_editor::open(self, id);
+        }
+        if let Some(id) = open_object_preview {
+            object_preview::open(self, id);
         }
 
         self.mouse_held = if self.left_down {
@@ -881,6 +912,243 @@ impl super::App {
             anim_sim_editor::edit_binding(self, i, |b| b.scope = scope);
         }
     }
+
+    fn redraw_object_preview(&mut self) {
+        let (win_w, win_h) = self.win_size();
+
+        let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
+            self.renderer.as_mut(),
+            self.surface.as_ref(),
+            self.overlay.as_mut(),
+            self.ui.as_mut(),
+        ) else {
+            return;
+        };
+
+        let now = Instant::now();
+        self.last_tick = now;
+
+        let game_dir = self.runtime.game_dir().to_path_buf();
+        let object_id = self.object_preview.as_ref().map(|s| s.object_id.clone());
+        let object_mesh_path = object_id
+            .as_ref()
+            .and_then(|id| self.runtime.scene().find_object(id))
+            .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
+        if let Some(path) = &object_mesh_path {
+            if !self.mesh_cache.contains_key(path) {
+                let full_path = game_dir.join(path);
+                match GltfMesh::load(
+                    &renderer.device,
+                    &renderer.queue,
+                    renderer.mesh_texture_layout(),
+                    &full_path,
+                ) {
+                    Ok(mesh) => {
+                        let model_uniform = renderer.create_model_uniform();
+                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
+                    }
+                    Err(e) => {
+                        log::warn!("space_soup_editor: object preview failed to load '{path}': {e}")
+                    }
+                }
+            }
+        }
+
+        let Some(state) = self.object_preview.as_ref() else {
+            return;
+        };
+        if self.runtime.scene().find_object(&state.object_id).is_none() {
+            object_preview::close(self);
+            return;
+        }
+        self.camera.position = state.orbit.eye_position();
+        self.camera.rotation = state.orbit.rotation();
+
+        object_preview::update_transforms(state, self.runtime.scene(), &mut self.mesh_cache);
+        let mut cuboids = object_preview::collect_cuboid(state, self.runtime.scene());
+        cuboids.extend(object_preview::collect_skeleton_cuboids(
+            state,
+            self.runtime.scene(),
+            &self.mesh_cache,
+        ));
+        let mut mesh_instances =
+            object_preview::collect_mesh_instances(state, self.runtime.scene(), &self.mesh_cache);
+
+        let object_id = state.object_id.clone();
+        mesh_instances.extend(scene::sync_gizmo_and_collect(
+            &mut self.xform_gizmo,
+            &mut self.gizmo_assets,
+            &self.camera,
+            (win_w, win_h),
+            &self.runtime.scene().objects,
+            Some(&object_id),
+            ViewMode::Edit,
+            false,
+            self.gizmo_dragging,
+        ));
+
+        let frame = match surface.get_current_texture() {
+            Ok(f) => f,
+            Err(e) => {
+                log::warn!("surface error: {e}");
+                return;
+            }
+        };
+        let view = frame.texture.create_view(&TextureViewDescriptor::default());
+
+        renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
+
+        let ui_input = agate::UiInput {
+            mouse_pos: self.mouse_pos,
+            mouse_held: std::mem::take(&mut self.mouse_held),
+            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
+            mouse_released: std::mem::take(&mut self.mouse_released),
+            scroll_y: std::mem::take(&mut self.scroll_y),
+            text: std::mem::take(&mut self.text_input),
+            keys: std::mem::take(&mut self.named_keys),
+            cmd: self.mods.super_key() || self.mods.control_key(),
+            shift: self.mods.shift_key(),
+            alt: self.mods.alt_key(),
+            dt: 0.0,
+        };
+        ui.begin_frame(win_w, win_h, &ui_input);
+
+        let theme: Theme = ui.theme;
+        let layout = Layout::new(win_w, win_h, &theme);
+        ui.card_border(layout.grab_pose_viewport());
+
+        let Some(state) = self.object_preview.as_mut() else {
+            return;
+        };
+        let (done_clicked, new_mode) =
+            draw_preview_header(ui, &theme, &layout, state, self.xform_gizmo.mode);
+        if let Some(mode) = new_mode {
+            self.xform_gizmo.mode = mode;
+        }
+
+        let mut scene_dirty = self.scene_dirty;
+        let game_dir_for_panel = self.runtime.game_dir().to_path_buf();
+        let Some(state) = self.object_preview.as_mut() else {
+            return;
+        };
+        let panel_actions = object_preview_panel::draw(
+            ui,
+            &theme,
+            &layout,
+            state,
+            self.runtime.scene_mut(),
+            &game_dir_for_panel,
+            &mut scene_dirty,
+        );
+        self.scene_dirty = scene_dirty;
+        let current_id = self
+            .object_preview
+            .as_ref()
+            .map(|s| s.object_id.clone())
+            .unwrap_or(object_id);
+        self.selected_object = Some(current_id.clone());
+
+        if panel_actions.open_script_editor {
+            let text = crate::app::scene_bridge::object_script(self.runtime.scene(), &current_id);
+            self.editor.set_text(&text);
+            self.editing = Some(EditTarget::ObjectScript(current_id.clone()));
+            self.editor_focused = true;
+        }
+        if panel_actions.deleted {
+            self.runtime
+                .scene_mut()
+                .objects
+                .retain(|o| o.id != current_id);
+            self.selected_object = None;
+            self.scene_dirty = true;
+        }
+
+        overlay.set_items(ui.finish());
+
+        let mut encoder = renderer
+            .device
+            .create_command_encoder(&CommandEncoderDescriptor {
+                label: Some("overlay_enc"),
+            });
+        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
+        renderer.queue.submit(Some(encoder.finish()));
+        frame.present();
+
+        self.mouse_held = if self.left_down {
+            vec![agate::AMouseButton::Left]
+        } else {
+            vec![]
+        };
+
+        if done_clicked
+            || panel_actions.open_script_editor
+            || panel_actions.deleted
+            || !self.runtime.scene().objects.iter().any(|o| o.id == current_id)
+        {
+            object_preview::close(self);
+        }
+        if panel_actions.open_grab_pose_editor {
+            object_preview::close(self);
+            grab_pose_editor::open(self, current_id);
+        }
+    }
+}
+
+fn draw_preview_header(
+    ui: &mut agate::Ui,
+    theme: &Theme,
+    layout: &Layout,
+    state: &object_preview::ObjectPreviewState,
+    current_mode: GizmoMode,
+) -> (bool, Option<GizmoMode>) {
+    use agate::theme as t;
+
+    let bar = layout.editor_tab;
+    ui.fill(bar, t::TOOLBAR_BG);
+    ui.separator(bar[0], bar[1] + bar[3] - theme.px(1.0), bar[2]);
+
+    let btn_h = theme.px(24.0);
+    let btn_y = bar[1] + (bar[3] - btn_h) * 0.5;
+    let mut right_flow = agate::Flow::row_from_right(
+        bar[0] + bar[2] - theme.px(super::layout::PAD),
+        btn_y,
+        btn_h,
+        theme.px(6.0),
+    );
+    let done_r = right_flow.take(theme.px(70.0));
+    let scale_r = right_flow.take(theme.px(56.0));
+    let rotate_r = right_flow.take(theme.px(56.0));
+    let move_r = right_flow.take(theme.px(56.0));
+
+    let title = format!("Preview \u{2014} {}", state.object_id);
+    ui.label_styled(
+        bar[0] + theme.px(super::layout::PAD),
+        bar[1] + (bar[3] - theme.body()) * 0.5,
+        &title,
+        theme.body(),
+        t::TEXT_PRIMARY,
+        (move_r[0] - bar[0] - theme.px(super::layout::PAD)).max(0.0),
+        Some(bar),
+    );
+
+    let mode_rects = [move_r, rotate_r, scale_r];
+    let modes = [GizmoMode::Translate, GizmoMode::Rotate, GizmoMode::Scale];
+    let labels = ["Move", "Rotate", "Scale"];
+    let mut clicked_mode = None;
+    for i in 0..3 {
+        let active = current_mode == modes[i];
+        let (bg, fg) = if active {
+            (t::ACCENT, t::TEXT_ON_ACCENT)
+        } else {
+            (t::CONTROL_BG, t::TEXT_SECONDARY)
+        };
+        if ui.button_styled(mode_rects[i], labels[i], bg, fg) {
+            clicked_mode = Some(modes[i]);
+        }
+    }
+
+    let done_clicked = ui.button_secondary(done_r, "Done");
+    (done_clicked, clicked_mode)
 }
 
 fn draw_editor_tab(

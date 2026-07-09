@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use glam::{Mat4, Quat, Vec3};
+use glam::{EulerRot, Mat4, Quat, Vec3};
 
 use space_soup::renderer::mesh::GltfSkin;
 use space_soup::renderer::{Camera, GltfMesh, MeshInstance, Renderer};
@@ -293,4 +293,29 @@ pub(crate) fn apply_gizmo_drag_to_joint(app: &mut App) {
             app.scene_dirty = true;
         }
     }
+}
+
+pub(crate) fn snap_vec3(v: Vec3, step: f32) -> Vec3 {
+    if step <= 0.0 {
+        return v;
+    }
+    Vec3::new(
+        (v.x / step).round() * step,
+        (v.y / step).round() * step,
+        (v.z / step).round() * step,
+    )
+}
+
+pub(crate) fn snap_rotation(q: Quat, step_deg: f32) -> Quat {
+    if step_deg <= 0.0 {
+        return q;
+    }
+    let (ex, ey, ez) = q.to_euler(EulerRot::YXZ);
+    let snap = |a: f32| (a.to_degrees() / step_deg).round() * step_deg;
+    Quat::from_euler(
+        EulerRot::YXZ,
+        snap(ey).to_radians(),
+        snap(ex).to_radians(),
+        snap(ez).to_radians(),
+    )
 }

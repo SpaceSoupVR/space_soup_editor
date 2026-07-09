@@ -2,8 +2,23 @@ use std::path::Path;
 
 use glam::{Quat, Vec3};
 
-use space_soup::renderer::GltfMesh;
-use space_soup_engine::{Color3, CuboidDef, CuboidStyle, GameObject, MeshRef, Scene};
+use space_soup::renderer::{self, GltfMesh};
+use space_soup_engine::{Color3, CuboidDef, CuboidStyle, GameObject, MeshRef, RenderLight, Scene};
+
+pub(crate) fn to_render_light(l: &RenderLight) -> renderer::Light {
+    renderer::Light {
+        position: l.position,
+        direction: l.direction,
+        kind: match l.kind {
+            space_soup_engine::LightKind::Point => renderer::LightKind::Point,
+            space_soup_engine::LightKind::Spot => renderer::LightKind::Spot,
+        },
+        color: renderer::Color3(l.color.0, l.color.1, l.color.2, l.color.3),
+        intensity: l.intensity,
+        range: l.range,
+        cone_angle_deg: l.cone_angle_deg,
+    }
+}
 
 pub(crate) fn new_object(
     id: String,
@@ -43,6 +58,8 @@ pub(crate) fn new_object(
         grip_points: Vec::new(),
         slider_joint: None,
         terrain_collider: None,
+        light: None,
+        sound: None,
     }
 }
 

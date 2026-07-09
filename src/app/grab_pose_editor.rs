@@ -8,7 +8,7 @@ use space_soup_engine::{GripKind, GripPointDef, Hand, Scene};
 
 use crate::transform_gizmo::{GizmoMode, TransformGizmo};
 
-use super::snap::{compute_skin_matrices, hand_glb_path};
+use super::snap::{compute_skin_matrices, hand_glb_path, snap_rotation, snap_vec3};
 use super::App;
 
 /// Cache key for the grab-pose editor's own copy of a hand mesh. Distinct from
@@ -403,31 +403,6 @@ pub(crate) fn apply_gizmo_drag(app: &mut App) {
         }
     }
     app.scene_dirty = true;
-}
-
-fn snap_vec3(v: Vec3, step: f32) -> Vec3 {
-    if step <= 0.0 {
-        return v;
-    }
-    Vec3::new(
-        (v.x / step).round() * step,
-        (v.y / step).round() * step,
-        (v.z / step).round() * step,
-    )
-}
-
-fn snap_rotation(q: Quat, step_deg: f32) -> Quat {
-    if step_deg <= 0.0 {
-        return q;
-    }
-    let (ex, ey, ez) = q.to_euler(EulerRot::YXZ);
-    let snap = |a: f32| (a.to_degrees() / step_deg).round() * step_deg;
-    Quat::from_euler(
-        EulerRot::YXZ,
-        snap(ey).to_radians(),
-        snap(ex).to_radians(),
-        snap(ez).to_radians(),
-    )
 }
 
 pub(crate) fn begin_drag_snapshot(app: &mut App) {

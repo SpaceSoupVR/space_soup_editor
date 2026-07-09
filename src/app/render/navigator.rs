@@ -1,5 +1,5 @@
 use agate::theme as t;
-use agate::{Theme, Ui, WidgetId};
+use agate::{Region, Theme, Ui, WidgetId};
 use space_soup_engine::{DebugPacket, GameObject};
 
 use super::super::layout::{Layout, PAD, ROW_H};
@@ -27,8 +27,9 @@ pub(crate) fn draw(
 
     let nav = layout.navigator;
     let footer_h = theme.px(FOOTER_H);
-    let rows_area = [nav[0], nav[1], nav[2], (nav[3] - footer_h).max(0.0)];
-    let footer_y = nav[1] + nav[3] - footer_h;
+    let (footer_rect, rows_region) = Region::new(nav).split_bottom(footer_h);
+    let rows_area = rows_region.rect();
+    let footer_y = footer_rect[1];
 
     let row_h = theme.px(ROW_H);
     let top_pad = theme.px(10.0);
