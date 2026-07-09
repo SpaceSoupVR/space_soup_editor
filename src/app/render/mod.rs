@@ -14,7 +14,9 @@ use glam::{Quat, Vec3};
 use wgpu::{CommandEncoderDescriptor, TextureViewDescriptor};
 
 use space_soup::renderer::{Color3, Cuboid, GltfMesh, MeshInstance};
-use space_soup_engine::{InputFrame, LocomotionInput, PlayerRig};
+use space_soup_engine::{InputFrame, LocomotionInput, PlayerFrameInput, PlayerRig};
+use space_soup_protocol::PlayerId;
+use std::collections::HashMap;
 
 use agate::Theme;
 
@@ -63,13 +65,20 @@ impl super::App {
                 let (c, m, l) = self.runtime.render_lists();
                 (c, m, l, None)
             } else {
-                self.runtime.update(
-                    dt,
-                    &InputFrame::default(),
-                    PlayerRig::new(),
-                    &LocomotionInput::default(),
-                    None,
-                )
+                // Editor's "Play mode" preview is single-player; the engine
+                // is otherwise multi-player-capable now, so it just supplies
+                // one entry under the fixed local-player id.
+                let mut inputs = HashMap::new();
+                inputs.insert(
+                    PlayerId::local(),
+                    PlayerFrameInput {
+                        rig: PlayerRig::new(),
+                        input: InputFrame::default(),
+                        locomotion_input: LocomotionInput::default(),
+                        teleport_target: None,
+                    },
+                );
+                self.runtime.update(dt, &inputs)
             };
 
         if let Some(next) = scene_change {

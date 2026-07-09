@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 space_soup = { path = "../space_soup", features = ["canvas", "renderer", "voxelize"] }
 space_soup_engine  = { path = "../space_soup_engine" }
+space_soup_protocol = { path = "../space_soup_protocol" }
 agate  = { path = "../agate" }
 
 winit      = "0.30"
