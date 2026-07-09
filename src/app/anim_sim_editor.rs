@@ -183,6 +183,7 @@ pub(crate) fn open(app: &mut App, object_id: String) {
 
 pub(crate) fn close(app: &mut App) {
     app.anim_sim_editor = None;
+    super::scene_bridge::save_if_dirty(app);
 }
 
 // ---------------------------------------------------------------------------

@@ -87,6 +87,23 @@ pub(crate) fn save_scene(
     Ok(path)
 }
 
+/// Persists the scene if it has unsaved changes. The isolated single-object
+/// editors (grab pose, object preview, anim sim) have no save affordance of
+/// their own, so without this a closed edit silently never reaches disk —
+/// and never reaches the Quest, which loads scene JSON from device storage.
+pub(crate) fn save_if_dirty(app: &mut super::App) {
+    if !app.scene_dirty {
+        return;
+    }
+    match save_scene(app.runtime.scene(), app.runtime.game_dir(), app.runtime.scene_name()) {
+        Ok(path) => {
+            log::info!("space_soup_editor: saved scene to {}", path.display());
+            app.scene_dirty = false;
+        }
+        Err(e) => log::warn!("space_soup_editor: failed to save scene: {e}"),
+    }
+}
+
 pub(crate) fn object_script(scene: &Scene, id: &str) -> String {
     scene
         .find_object(id)
