@@ -8,6 +8,7 @@ use space_soup_engine::Scene;
 
 use super::super::layout::{Layout, PAD, ROW_H};
 use super::super::EditTarget;
+use super::split_row;
 
 use agate::TextEditor;
 
@@ -26,6 +27,8 @@ pub(crate) fn draw(
     open_grab_pose_editor: &mut Option<String>,
     open_anim_sim_editor: &mut Option<String>,
     content_height: &mut f32,
+    editable: bool,
+    rot_edit: &mut Option<(String, [f32; 3])>,
     _packet: &space_soup_engine::DebugPacket,
 ) {
     ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
@@ -82,6 +85,8 @@ pub(crate) fn draw(
                 open_script_editor,
                 open_grab_pose_editor,
                 open_anim_sim_editor,
+                editable,
+                rot_edit,
             );
             let ch = (bottom_y + scroll_y) - iy + theme.px(12.0);
             ui.end_scroll_area(scroll_id, layout.inspector, ch);
@@ -181,6 +186,8 @@ fn draw_object_cards(
     open_script_editor: &mut Option<String>,
     open_grab_pose_editor: &mut Option<String>,
     open_anim_sim_editor: &mut Option<String>,
+    editable: bool,
+    rot_edit: &mut Option<(String, [f32; 3])>,
 ) -> f32 {
     let cards = layout.inspector_cards(theme, body_top);
 
@@ -242,10 +249,11 @@ fn draw_object_cards(
             label_r[2],
             None,
         );
-        let wid = WidgetId::of(&format!("pos_{i}_{id}"));
-        let val_str = format!("{:.3}", pos_vals[i]);
-        if let Some(new_str) = ui.text_input(wid, input_r, &val_str, "") {
-            if let Ok(v) = new_str.trim().parse::<f32>() {
+        if editable {
+            let wid = WidgetId::of(&format!("pos_{i}_{id}"));
+            if let Some(v) =
+                ui.drag_float_clipped(wid, input_r, pos_vals[i], 0.005, "", Some(clip_ins))
+            {
                 if let Some(obj) = scene.find_object_mut(id) {
                     match i {
                         0 => obj.cuboid.position.x = v,
@@ -255,6 +263,8 @@ fn draw_object_cards(
                     *scene_dirty = true;
                 }
             }
+        } else {
+            draw_readonly_value(ui, theme, input_r, &format!("{:.3}", pos_vals[i]), clip_ins);
         }
     }
 
@@ -288,22 +298,23 @@ fn draw_object_cards(
             label_r[2],
             None,
         );
-        let wid = WidgetId::of(&format!("sz_{i}_{id}"));
-        let val_str = format!("{:.3}", sz_vals[i]);
-        if let Some(new_str) = ui.text_input(wid, input_r, &val_str, "") {
-            if let Ok(v) = new_str.trim().parse::<f32>() {
-                if v > 0.0 {
-                    if let Some(obj) = scene.find_object_mut(id) {
-                        let half = (v * 0.5).max(0.005);
-                        match i {
-                            0 => obj.cuboid.half_size.x = half,
-                            1 => obj.cuboid.half_size.y = half,
-                            _ => obj.cuboid.half_size.z = half,
-                        }
-                        *scene_dirty = true;
+        if editable {
+            let wid = WidgetId::of(&format!("sz_{i}_{id}"));
+            if let Some(v) =
+                ui.drag_float_clipped(wid, input_r, sz_vals[i], 0.005, "", Some(clip_ins))
+            {
+                if let Some(obj) = scene.find_object_mut(id) {
+                    let half = (v * 0.5).max(0.005);
+                    match i {
+                        0 => obj.cuboid.half_size.x = half,
+                        1 => obj.cuboid.half_size.y = half,
+                        _ => obj.cuboid.half_size.z = half,
                     }
+                    *scene_dirty = true;
                 }
             }
+        } else {
+            draw_readonly_value(ui, theme, input_r, &format!("{:.3}", sz_vals[i]), clip_ins);
         }
     }
 
@@ -326,8 +337,16 @@ fn draw_object_cards(
         cards.rot_card[2],
         None,
     );
-    let (ex, ey, ez) = obj_rotation.to_euler(EulerRot::YXZ);
-    let rot_deg = [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()];
+    // Axis-indexed [X, Y, Z]; glam's YXZ decomposition returns (Y, X, Z).
+    // While a drag is in progress the sticky `rot_edit` euler is shown/edited
+    // instead of a fresh decompose, which would collapse Y and Z together near
+    // the X = ±90° gimbal lock.
+    let (ey, ex, ez) = obj_rotation.to_euler(EulerRot::YXZ);
+    let rot_deg = match rot_edit {
+        Some((rid, deg)) if rid == id => *deg,
+        _ => [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()],
+    };
+    let mut rot_dragging = false;
     for i in 0..3usize {
         let (label_r, input_r) = split_row(cards.rot_rows[i], label_w, field_gap);
         ui.label_styled(
@@ -339,10 +358,11 @@ fn draw_object_cards(
             label_r[2],
             None,
         );
-        let wid = WidgetId::of(&format!("rot_{i}_{id}"));
-        let val_str = format!("{:.1}", rot_deg[i]);
-        if let Some(new_str) = ui.text_input(wid, input_r, &val_str, "") {
-            if let Ok(v) = new_str.trim().parse::<f32>() {
+        if editable {
+            let wid = WidgetId::of(&format!("rot_{i}_{id}"));
+            if let Some(v) =
+                ui.drag_float_clipped(wid, input_r, rot_deg[i], 0.5, "", Some(clip_ins))
+            {
                 let mut deg = rot_deg;
                 deg[i] = v;
                 if let Some(obj) = scene.find_object_mut(id) {
@@ -354,8 +374,15 @@ fn draw_object_cards(
                     );
                     *scene_dirty = true;
                 }
+                *rot_edit = Some((id.to_string(), deg));
+                rot_dragging = true;
             }
+        } else {
+            draw_readonly_value(ui, theme, input_r, &format!("{:.1}", rot_deg[i]), clip_ins);
         }
+    }
+    if !rot_dragging {
+        *rot_edit = None;
     }
 
     ui.separator(cards.col_card[0], cards.col_card[1], cards.col_card[2]);
@@ -433,10 +460,15 @@ fn draw_object_cards(
     }
 
     let hint_y = cards.bottom_y + theme.px(14.0);
+    let hint = if editable {
+        "Drag a value left/right to slide it."
+    } else {
+        "Values are read-only here \u{2014} switch to Edit mode to change them."
+    };
     ui.label_styled(
         ix + theme.px(PAD),
         hint_y,
-        "Click a field and type a value.",
+        hint,
         theme.small(),
         t::TEXT_SECONDARY,
         iw - theme.px(PAD * 2.0),
@@ -444,6 +476,19 @@ fn draw_object_cards(
     );
 
     hint_y + theme.px(20.0)
+}
+
+/// A value shown in a field-shaped slot but not editable (non-Edit view modes).
+fn draw_readonly_value(ui: &mut Ui, theme: &Theme, r: [f32; 4], text: &str, clip: [f32; 4]) {
+    ui.label_styled(
+        r[0] + theme.px(8.0),
+        r[1] + (r[3] - theme.body()) * 0.5,
+        text,
+        theme.body(),
+        t::TEXT_DISABLED,
+        r[2] - theme.px(16.0),
+        Some(clip),
+    );
 }
 
 fn default_script_stub(id: &str) -> String {
@@ -461,15 +506,4 @@ fn unique_id(scene: &Scene, base: &str) -> String {
         }
         n += 1;
     }
-}
-
-fn split_row(row: [f32; 4], label_w: f32, field_gap: f32) -> ([f32; 4], [f32; 4]) {
-    let label_r = [row[0], row[1], label_w, row[3]];
-    let input_r = [
-        row[0] + label_w + field_gap,
-        row[1],
-        row[2] - label_w - field_gap,
-        row[3],
-    ];
-    (label_r, input_r)
 }

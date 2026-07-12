@@ -3,7 +3,7 @@
 //! data mutations are returned as `AnimSimPanelActions` and applied by
 //! `render/mod.rs` through `anim_sim_editor` functions.
 
-use glam::EulerRot;
+use glam::Quat;
 
 use agate::theme as t;
 use agate::{Theme, Ui, WidgetId};
@@ -14,12 +14,22 @@ use super::super::anim_sim_editor::{
     self, AnimSimEditorState, KeyChannel, KeyField, SNAP_STEPS, SPEED_STEPS,
 };
 use super::super::layout::{Layout, PAD, ROW_H};
+use super::confirm::{draw_exit_confirm, ExitChoice};
+use super::split_row;
 
 #[derive(Default)]
 pub(crate) struct AnimSimPanelActions {
-    pub close: bool,
+    pub save: bool,
+    pub request_exit: bool,
+    pub exit_discard: bool,
+    pub exit_save: bool,
+    pub cancel_exit: bool,
     pub undo: bool,
     pub redo: bool,
+    pub recenter: bool,
+    /// Outer Some = fired; inner is the new snap grid (None = snapping off).
+    pub set_snap_step: Option<Option<f32>>,
+    pub set_speed: Option<f32>,
 
     pub select_anim: Option<usize>,
     pub add_anim: bool,
@@ -64,19 +74,7 @@ fn key_row_label(key: &Keyframe) -> String {
     ch.push(if key.position.is_some() { 'P' } else { '\u{00b7}' });
     ch.push(if key.rotation.is_some() { 'R' } else { '\u{00b7}' });
     ch.push(if key.scale.is_some() { 'S' } else { '\u{00b7}' });
-    ch.push(if key.color.is_some() { 'C' } else { '\u{00b7}' });
     format!("{:>6.2}s   [{ch}]", key.t)
-}
-
-fn split_row(row: [f32; 4], label_w: f32, field_gap: f32) -> ([f32; 4], [f32; 4]) {
-    let label_r = [row[0], row[1], label_w, row[3]];
-    let input_r = [
-        row[0] + label_w + field_gap,
-        row[1],
-        row[2] - label_w - field_gap,
-        row[3],
-    ];
-    (label_r, input_r)
 }
 
 /// Draws the easing curve (plus a playhead marker) as a dotted polyline made
@@ -129,30 +127,91 @@ pub(crate) fn draw(
 
     // -- Top bar ------------------------------------------------------------
     let bar = layout.editor_tab;
-    ui.fill(bar, t::TOOLBAR_BG);
-    ui.separator(bar[0], bar[1] + bar[3] - theme.px(1.0), bar[2]);
-    let title = format!("Animation Simulator \u{2014} {}", state.object_id);
-    ui.label_styled(
-        bar[0] + theme.px(PAD),
-        bar[1] + (bar[3] - theme.body()) * 0.5,
-        &title,
-        theme.body(),
-        t::TEXT_PRIMARY,
-        bar[2] - theme.px(160.0),
-        Some(bar),
-    );
-    let done_w = theme.px(90.0);
-    let done_h = theme.px(28.0);
-    let done_r = [
-        bar[0] + bar[2] - theme.px(PAD) - done_w,
-        bar[1] + (bar[3] - done_h) * 0.5,
-        done_w,
-        done_h,
-    ];
-    if ui.button_secondary(done_r, "Done") {
-        actions.close = true;
+    let draw_top_bar = |ui: &mut Ui| {
+        ui.fill(bar, t::TOOLBAR_BG);
+        ui.separator(bar[0], bar[1] + bar[3] - theme.px(1.0), bar[2]);
+        let title = format!("Animation Simulator \u{2014} {}", state.object_id);
+        ui.label_styled(
+            bar[0] + theme.px(PAD),
+            bar[1] + (bar[3] - theme.body()) * 0.5,
+            &title,
+            theme.body(),
+            t::TEXT_PRIMARY,
+            bar[2] - theme.px(340.0),
+            Some(bar),
+        );
+    };
+
+    // The unsaved-changes dialog replaces all other interaction (immediate-mode
+    // widgets underneath would still take clicks).
+    if state.confirm_exit {
+        draw_top_bar(ui);
+        ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+        match draw_exit_confirm(ui, theme, layout) {
+            Some(ExitChoice::Exit) => actions.exit_discard = true,
+            Some(ExitChoice::SaveExit) => actions.exit_save = true,
+            Some(ExitChoice::Return) => actions.cancel_exit = true,
+            None => {}
+        }
+        return actions;
     }
-    ui.tooltip(done_r, "Close the editor \u{2014} your changes stay on the object");
+
+    draw_top_bar(ui);
+    let done_h = theme.px(28.0);
+    let btn_y = bar[1] + (bar[3] - done_h) * 0.5;
+    let tb_gap = theme.px(8.0);
+    let dirty = state.dirty(scene);
+
+    let exit_w = theme.px(70.0);
+    let exit_r = [bar[0] + bar[2] - theme.px(PAD) - exit_w, btn_y, exit_w, done_h];
+    if ui.button_secondary(exit_r, "Exit") {
+        actions.request_exit = true;
+    }
+    ui.tooltip(exit_r, "Close the editor \u{2014} asks first if you have unsaved changes");
+
+    let save_w = theme.px(70.0);
+    let save_r = [exit_r[0] - tb_gap - save_w, btn_y, save_w, done_h];
+    if dirty {
+        if ui.button_success(save_r, "Save") {
+            actions.save = true;
+        }
+        ui.tooltip(save_r, "Keep these animations (Save Scene in the main view writes to disk)");
+    } else {
+        ui.button_disabled(save_r, "Save", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
+        ui.tooltip(save_r, "No changes to save");
+    }
+
+    // Undo/Redo live in the top bar (always reachable, not down in the scroll).
+    let ur_w = theme.px(60.0);
+    let redo_r = [save_r[0] - tb_gap - ur_w, btn_y, ur_w, done_h];
+    let undo_r = [redo_r[0] - tb_gap - ur_w, btn_y, ur_w, done_h];
+    if state.can_undo() {
+        if ui.button_secondary(undo_r, "Undo") {
+            actions.undo = true;
+        }
+    } else {
+        ui.button_disabled(undo_r, "Undo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
+    }
+    ui.tooltip(undo_r, "Take back the last change (\u{2318}Z)");
+    if state.can_redo() {
+        if ui.button_secondary(redo_r, "Redo") {
+            actions.redo = true;
+        }
+    } else {
+        ui.button_disabled(redo_r, "Redo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
+    }
+    ui.tooltip(redo_r, "Bring back what you undid (\u{21e7}\u{2318}Z)");
+
+    // Recenter sits just left of Undo.
+    let rc_w = theme.px(80.0);
+    let recenter_r = [undo_r[0] - tb_gap - rc_w, btn_y, rc_w, done_h];
+    if ui.button_secondary(recenter_r, "Recenter") {
+        actions.recenter = true;
+    }
+    ui.tooltip(
+        recenter_r,
+        "Point the camera back at the object if you've panned or zoomed away",
+    );
 
     // -- Panel scaffolding ----------------------------------------------------
     ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
@@ -172,6 +231,10 @@ pub(crate) fn draw(
     let content_area = layout.inspector;
     let scroll_id = WidgetId::of("animsim_scroll");
     let (_, scroll_y) = ui.scroll_area(scroll_id, content_area, state.content_height);
+    // Confine every widget drawn below to the panel so scrolled-past content
+    // (buttons, tabs, sliders — not just the self-clipping labels) stays hidden
+    // instead of spilling over the top bar and 3D view.
+    ui.push_clip(content_area);
     let y_start = layout.inspector[1] + theme.px(16.0) - scroll_y;
     let mut y = y_start;
 
@@ -369,7 +432,7 @@ pub(crate) fn draw(
         .unwrap_or(2);
     let speed_r = [cx, y, cw, row_h];
     if let Some(i) = ui.tabs(speed_r, speed_idx, &["\u{00bc}x", "\u{00bd}x", "1x", "2x", "4x"]) {
-        state.speed = SPEED_STEPS[i];
+        actions.set_speed = Some(SPEED_STEPS[i]);
     }
     ui.tooltip(speed_r, "Preview speed only \u{2014} the saved animation is unchanged");
     y += row_h + gap * 0.5;
@@ -379,7 +442,7 @@ pub(crate) fn draw(
         state.snap_step.is_some(),
         "Snap keyframe times",
     ) {
-        state.snap_step = if v { Some(0.1) } else { None };
+        actions.set_snap_step = Some(if v { Some(0.1) } else { None });
     }
     ui.tooltip(
         [cx, y, cw, theme.px(22.0)],
@@ -393,7 +456,7 @@ pub(crate) fn draw(
             .unwrap_or(1);
         let snap_r = [cx, y, cw, row_h];
         if let Some(i) = ui.tabs(snap_r, snap_idx, &["0.05", "0.1", "0.25", "0.5"]) {
-            state.snap_step = Some(SNAP_STEPS[i]);
+            actions.set_snap_step = Some(Some(SNAP_STEPS[i]));
         }
         ui.tooltip(snap_r, "Grid size, in seconds");
         y += row_h + gap * 0.5;
@@ -412,7 +475,7 @@ pub(crate) fn draw(
         ) {
             actions.select_key = Some(i);
         }
-        ui.tooltip(row_r, "A saved pose: P=position R=rotation S=scale C=color");
+        ui.tooltip(row_r, "A saved pose: P=position R=rotation S=scale");
         y += list_row_h + theme.px(2.0);
     }
     y += theme.px(4.0);
@@ -498,14 +561,8 @@ pub(crate) fn draw(
                 k.scale.is_some(),
                 "Toggle: does this keyframe resize the object?",
             ),
-            (
-                "Col",
-                KeyChannel::Color,
-                k.color.is_some(),
-                "Toggle: does this keyframe tint the object?",
-            ),
         ];
-        let cbw = (cw - theme.px(24.0)) / 4.0;
+        let cbw = (cw - theme.px(16.0)) / 3.0;
         for (i, (label, ch, on, tip)) in ch_defs.iter().enumerate() {
             let r = [cx + i as f32 * (cbw + theme.px(8.0)), y, cbw, theme.px(24.0)];
             let (bg, fg) = if *on {
@@ -573,9 +630,13 @@ pub(crate) fn draw(
                 "How the object is turned at this keyframe, in degrees",
             );
             y += theme.px(18.0);
-            // Same YXZ euler -> [X, Y, Z] mapping as the grab pose editor.
-            let (ey, ex, ez) = q.to_euler(EulerRot::YXZ);
-            let deg = [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()];
+            // Rotation is shown/edited in the display (rest-relative) frame so
+            // the axes stay independent (see `euler_for_key`). Rest reads (0,0,0).
+            let disp = obj
+                .map(anim_sim_editor::display_rotation_offset)
+                .unwrap_or(Quat::IDENTITY);
+            let key_idx = state.selected_key.unwrap_or(0);
+            let deg = state.euler_for_key(state.selected_anim, key_idx, q, disp);
             for (i, axis) in axes.iter().enumerate() {
                 let (label_r, input_r) = split_row([cx, y, cw, fh], label_w, field_gap);
                 ui.label_styled(
@@ -630,45 +691,6 @@ pub(crate) fn draw(
                     ui.drag_float_clipped(wid, input_r, vals[i], 0.005, "", Some(content_area))
                 {
                     actions.key_field_edit = Some((KeyField::Scale(i), v.max(0.001)));
-                }
-                y += fh + field_gap_y;
-            }
-            y += theme.px(4.0);
-        }
-
-        if let Some(c) = k.color {
-            ui.label_styled(
-                cx,
-                y,
-                "COLOR (rgba 0-255)",
-                theme.small(),
-                t::TEXT_SECONDARY,
-                cw,
-                Some(content_area),
-            );
-            ui.tooltip(
-                [cx, y, cw, theme.px(16.0)],
-                "Tint at this keyframe \u{2014} shows on box objects, not meshes",
-            );
-            y += theme.px(18.0);
-            let vals = [c.0 as f32, c.1 as f32, c.2 as f32, c.3 as f32];
-            let chans = ["R", "G", "B", "A"];
-            for (i, chan) in chans.iter().enumerate() {
-                let (label_r, input_r) = split_row([cx, y, cw, fh], label_w, field_gap);
-                ui.label_styled(
-                    label_r[0],
-                    label_r[1] + (label_r[3] - theme.body()) * 0.5,
-                    chan,
-                    theme.body(),
-                    t::TEXT_SECONDARY,
-                    label_r[2],
-                    Some(content_area),
-                );
-                let wid = WidgetId::of(&format!("animsim_key_col_{i}"));
-                if let Some(v) =
-                    ui.drag_float_clipped(wid, input_r, vals[i], 1.0, "", Some(content_area))
-                {
-                    actions.key_field_edit = Some((KeyField::Color(i), v));
                 }
                 y += fh + field_gap_y;
             }
@@ -753,30 +775,9 @@ pub(crate) fn draw(
     ui.tooltip(add_bind_r, "Make a controller button play an animation in-game");
     y += theme.px(26.0) + gap;
 
-    // -- Undo / redo / hotkeys ------------------------------------------------------
+    // -- Hotkeys hint (Undo/Redo live in the top bar) --------------------------------
     ui.separator(cx, y, cw);
     y += theme.px(10.0);
-    let can_undo = state.can_undo();
-    let undo_r = [cx, y, bw2, theme.px(28.0)];
-    if can_undo {
-        if ui.button_styled(undo_r, "Undo", t::CONTROL_BG, t::TEXT_PRIMARY) {
-            actions.undo = true;
-        }
-    } else {
-        ui.button_disabled(undo_r, "Undo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
-    }
-    ui.tooltip(undo_r, "Take back the last animation edit (\u{2318}Z)");
-    let can_redo = state.can_redo();
-    let redo_r = [cx + bw2 + theme.px(8.0), y, bw2, theme.px(28.0)];
-    if can_redo {
-        if ui.button_styled(redo_r, "Redo", t::CONTROL_BG, t::TEXT_PRIMARY) {
-            actions.redo = true;
-        }
-    } else {
-        ui.button_disabled(redo_r, "Redo", t::CONTROL_ACTIVE, t::TEXT_DISABLED);
-    }
-    ui.tooltip(redo_r, "Bring back what you just undid (\u{21e7}\u{2318}Z)");
-    y += theme.px(28.0) + theme.px(8.0);
     ui.label_styled(
         cx,
         y,
@@ -789,8 +790,31 @@ pub(crate) fn draw(
     y += theme.px(36.0) + theme.px(16.0);
 
     let content_height = y - y_start + scroll_y;
+    ui.pop_clip();
     ui.end_scroll_area(scroll_id, content_area, content_height);
     state.content_height = content_height;
+
+    // -- Hover info box ---------------------------------------------------------
+    // Show the hovered control's help text in a fixed strip just below the top
+    // bar instead of a floating tooltip that overlaps the panel and 3D view.
+    let hint = ui.hovered_hint();
+    ui.clear_tooltip();
+    let info_r = [bar[0], bar[1] + bar[3], bar[2], theme.px(24.0)];
+    ui.fill(info_r, t::SURFACE_RAISED);
+    ui.separator(info_r[0], info_r[1] + info_r[3] - theme.px(1.0), info_r[2]);
+    let (info_text, info_color) = match &hint {
+        Some(h) => (h.as_str(), t::TEXT_PRIMARY),
+        None => ("Hover a control for a description.", t::TEXT_DISABLED),
+    };
+    ui.label_styled(
+        info_r[0] + theme.px(PAD),
+        info_r[1] + (info_r[3] - theme.body()) * 0.5,
+        info_text,
+        theme.body(),
+        info_color,
+        info_r[2] - theme.px(PAD) * 2.0,
+        Some(info_r),
+    );
 
     actions
 }

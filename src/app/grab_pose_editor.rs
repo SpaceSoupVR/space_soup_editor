@@ -4,9 +4,7 @@ use glam::{EulerRot, Mat4, Quat, Vec3};
 
 use space_soup::renderer::mesh_pipeline::ModelUniform;
 use space_soup::renderer::{Color3, Cuboid, GltfMesh, MeshInstance, Renderer};
-use space_soup_engine::{GripKind, GripPointDef, Hand, Scene};
-
-use crate::transform_gizmo::{GizmoMode, TransformGizmo};
+use space_soup_engine::{GameObject, GripKind, GripPointDef, Hand, Scene};
 
 use super::snap::{compute_skin_matrices, hand_glb_path};
 use super::App;
@@ -17,7 +15,7 @@ use super::App;
 /// path as a plain, unskinned mesh (setup.rs); reusing that entry would give the
 /// grab-pose hand no joint bind group, and the renderer draws such a mesh in
 /// neither pass — i.e. it would be invisible.
-fn hand_cache_key(hand: Hand) -> String {
+pub(crate) fn hand_cache_key(hand: Hand) -> String {
     format!("__grabpose_skinned__/{}", hand_glb_path(hand))
 }
 
@@ -28,13 +26,17 @@ fn one_vec3_arr() -> [f32; 3] {
     Vec3::ONE.to_array()
 }
 
-fn default_grip_point(existing: &[GripPointDef]) -> GripPointDef {
+fn default_grip_point(existing: &[GripPointDef], hand: Hand) -> GripPointDef {
+    let base = match hand {
+        Hand::Left => "left_grip",
+        Hand::Right => "right_grip",
+    };
     let mut n = 1;
     let name = loop {
         let candidate = if n == 1 {
-            "grip".to_string()
+            base.to_string()
         } else {
-            format!("grip_{n}")
+            format!("{base}_{n}")
         };
         if !existing.iter().any(|p| p.name == candidate) {
             break candidate;
@@ -44,6 +46,7 @@ fn default_grip_point(existing: &[GripPointDef]) -> GripPointDef {
     GripPointDef {
         name,
         kind: GripKind::Snap,
+        hand,
         local_pos: [0.0; 3],
         local_rot: identity_quat_arr(),
         hand_offset_scale: one_vec3_arr(),
@@ -51,46 +54,153 @@ fn default_grip_point(existing: &[GripPointDef]) -> GripPointDef {
     }
 }
 
-#[derive(Clone)]
-struct GrabPointEdit {
-    point_index: usize,
-    before: GripPointDef,
-    after: GripPointDef,
+/// Which grip points the viewport and point list show — display-only
+/// organization, never touching saved data. `All` (the default) shows
+/// everything; a handed view shows just that hand's points.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum HandView {
+    All,
+    Left,
+    Right,
 }
+
+impl HandView {
+    pub(crate) fn shows(self, point: &GripPointDef) -> bool {
+        match self {
+            HandView::All => true,
+            HandView::Left => point.hand == Hand::Left,
+            HandView::Right => point.hand == Hand::Right,
+        }
+    }
+}
+
+#[derive(Clone, PartialEq)]
+struct GripSnapshot {
+    points: Vec<GripPointDef>,
+}
+
+impl GripSnapshot {
+    fn of(obj: &GameObject) -> Self {
+        Self {
+            points: obj.grip_points.clone(),
+        }
+    }
+
+    fn restore(&self, obj: &mut GameObject) {
+        obj.grip_points = self.points.clone();
+    }
+}
+
+/// Identifies a continuous drag on one field so its many per-frame edits fold
+/// into a single undo entry instead of flooding (and evicting) the stack.
+/// `(point_index, field_code)`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct EditKey(usize, u8);
+
+fn field_code(f: PoseField) -> u8 {
+    match f {
+        PoseField::Pos(i) => 1 + i as u8,
+        PoseField::Rot(i) => 4 + i as u8,
+        PoseField::Scale(i) => 7 + i as u8,
+    }
+}
+
+const FINGER_FIELD_BASE: u8 = 10;
+/// Field codes for the snap-step drag fields (kept clear of pose/finger codes).
+const POS_SNAP_STEP_CODE: u8 = 30;
+const ROT_SNAP_STEP_CODE: u8 = 31;
+
+/// One undoable state: the grip points plus the editor's snap tool settings, so
+/// those toggles/steps are undoable too, not just the pose fields.
+#[derive(Clone, PartialEq)]
+struct GripUndoState {
+    data: GripSnapshot,
+    pos_snap: Option<f32>,
+    rot_snap_deg: Option<f32>,
+}
+
+impl GripUndoState {
+    fn capture(obj: &GameObject, state: &GrabPoseEditorState) -> Self {
+        Self {
+            data: GripSnapshot::of(obj),
+            pos_snap: state.pos_snap,
+            rot_snap_deg: state.rot_snap_deg,
+        }
+    }
+
+    fn restore(&self, obj: &mut GameObject, state: &mut GrabPoseEditorState) {
+        self.data.restore(obj);
+        state.pos_snap = self.pos_snap;
+        state.rot_snap_deg = self.rot_snap_deg;
+    }
+}
+
+#[derive(Clone)]
+struct GripEdit {
+    before: GripUndoState,
+    after: GripUndoState,
+    /// The drag this entry belongs to, if any; used to coalesce follow-up frames.
+    coalesce: Option<EditKey>,
+}
+
+const UNDO_CAP: usize = 100;
 
 pub(crate) struct GrabPoseEditorState {
     pub object_id: String,
     pub orbit: super::orbit_camera::OrbitCamera,
     pub active_point: usize,
-    pub preview_hand: Hand,
-    pub preview_mode: bool,
-    pub preview_rotation: Quat,
+    pub hand_view: HandView,
     pub pos_snap: Option<f32>,
     pub rot_snap_deg: Option<f32>,
 
+    /// The "you have unsaved changes" dialog is up; the panel draws only it.
+    pub confirm_exit: bool,
+
     pub content_height: f32,
 
-    undo: Vec<GrabPointEdit>,
-    redo: Vec<GrabPointEdit>,
-    drag_before: Option<GripPointDef>,
+    /// Grip points as of open/last save. Exit-without-saving restores this, so
+    /// edits stay local to the editor until saved (main-view Save Scene then
+    /// persists them to disk with the rest of the scene).
+    saved: GripSnapshot,
+
+    /// Sticky euler angles for the grip rotation currently being edited:
+    /// `(point_index, [x, y, z] degrees)`. Editing rotation through a quat
+    /// round-trip hits gimbal lock (in YXZ order the middle X axis locks near
+    /// ±90°, collapsing Y and Z so they move together). Holding the euler here
+    /// and only rebuilding the quat keeps the three fields independent.
+    rot_edit: Option<(usize, [f32; 3])>,
+
+    /// The drag currently coalescing into the top undo entry; cleared each frame
+    /// no field edit arrives (i.e. the drag ended).
+    active_coalesce: Option<EditKey>,
+
+    undo: Vec<GripEdit>,
+    redo: Vec<GripEdit>,
 }
 
 impl GrabPoseEditorState {
-    fn new(object_id: String, framing_radius: f32) -> Self {
+    fn new(object_id: String, framing_radius: f32, saved: GripSnapshot) -> Self {
         Self {
             object_id,
             orbit: super::orbit_camera::OrbitCamera::new(framing_radius),
             active_point: 0,
-            preview_hand: Hand::Right,
-            preview_mode: false,
-            preview_rotation: Quat::IDENTITY,
+            hand_view: HandView::All,
             pos_snap: None,
             rot_snap_deg: None,
+            confirm_exit: false,
             content_height: 900.0,
+            saved,
+            rot_edit: None,
+            active_coalesce: None,
             undo: Vec::new(),
             redo: Vec::new(),
-            drag_before: None,
         }
+    }
+
+    /// Ends any in-progress drag coalescing. Called each frame no field edit is
+    /// received, so the next drag starts a fresh undo entry.
+    pub(crate) fn end_coalesce(&mut self) {
+        self.active_coalesce = None;
     }
 
     pub fn can_undo(&self) -> bool {
@@ -98,6 +208,27 @@ impl GrabPoseEditorState {
     }
     pub fn can_redo(&self) -> bool {
         !self.redo.is_empty()
+    }
+
+    /// Whether the grip points differ from the last save (or open).
+    pub fn dirty(&self, scene: &Scene) -> bool {
+        scene
+            .find_object(&self.object_id)
+            .map(|o| GripSnapshot::of(o) != self.saved)
+            .unwrap_or(false)
+    }
+
+    /// Euler angles (degrees, `[x, y, z]`) to show/edit for a grip point's
+    /// rotation. Prefers the sticky `rot_edit` value mid-edit so repeated drags
+    /// don't re-decompose the quat (which collapses Y/Z near gimbal lock).
+    pub(crate) fn euler_for_point(&self, point_idx: usize, q: Quat) -> [f32; 3] {
+        if let Some((p, deg)) = self.rot_edit {
+            if p == point_idx {
+                return deg;
+            }
+        }
+        let (ey, ex, ez) = q.to_euler(EulerRot::YXZ);
+        [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()]
     }
 }
 
@@ -118,30 +249,10 @@ pub(crate) fn finger_curl_value(point: &GripPointDef, group_idx: usize) -> f32 {
         .unwrap_or(0.0)
 }
 
-pub(crate) fn apply_finger_curl(app: &mut App, group_idx: usize, value: f32) {
-    begin_drag_snapshot(app);
-    let (obj_id, active_point) = {
-        let Some(state) = app.grab_pose_editor.as_ref() else {
-            return;
-        };
-        (state.object_id.clone(), state.active_point)
-    };
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(active_point) {
-            if let Some((_, bones)) = FINGER_GROUPS.get(group_idx) {
-                let v = value.clamp(0.0, 1.0);
-                for bone in *bones {
-                    point.finger_curl.insert(bone.to_string(), v);
-                }
-                app.scene_dirty = true;
-            }
-        }
-    }
-    end_drag_commit(app);
-}
-
-fn reference_transform(preview_rotation: Quat) -> Mat4 {
-    Mat4::from_rotation_translation(preview_rotation, Vec3::ZERO)
+/// The object sits at the origin in its native orientation; the orbit camera
+/// provides the viewing angle.
+fn reference_transform() -> Mat4 {
+    Mat4::IDENTITY
 }
 
 fn point_root(reference: Mat4, point: &GripPointDef) -> Mat4 {
@@ -152,28 +263,101 @@ fn point_root(reference: Mat4, point: &GripPointDef) -> Mat4 {
     reference * offset_mat
 }
 
+// ---------------------------------------------------------------------------
+// Open / save / exit — edits live in the scene while the editor is open, but
+// only stick if saved; exiting restores the last-saved state. Saving here only
+// commits to the in-memory scene: writing to disk stays with the main view's
+// Save Scene button.
+// ---------------------------------------------------------------------------
+
 pub(crate) fn open(app: &mut App, object_id: String) {
     if let Some(obj) = app.runtime.scene_mut().find_object_mut(&object_id) {
         if obj.grip_points.is_empty() {
-            let point = default_grip_point(&obj.grip_points);
+            let point = default_grip_point(&obj.grip_points, Hand::Right);
             obj.grip_points.push(point);
         }
     }
-    app.scene_dirty = true;
 
+    let Some(obj) = app.runtime.scene().find_object(&object_id) else {
+        return;
+    };
+    let framing = obj.cuboid.half_size.length().max(0.05);
+    let saved = GripSnapshot::of(obj);
+
+    app.grab_pose_editor = Some(GrabPoseEditorState::new(object_id, framing, saved));
+}
+
+fn close(app: &mut App) {
+    app.grab_pose_editor = None;
+}
+
+/// Commit the current grip points as the saved state (kept when exiting).
+pub(crate) fn save(app: &mut App) {
+    let Some(state) = app.grab_pose_editor.as_mut() else {
+        return;
+    };
+    if let Some(obj) = app.runtime.scene().find_object(&state.object_id) {
+        state.saved = GripSnapshot::of(obj);
+        app.scene_dirty = true;
+    }
+}
+
+/// Exit button / Escape: close right away when clean, else ask.
+pub(crate) fn request_exit(app: &mut App) {
+    let dirty = app
+        .grab_pose_editor
+        .as_ref()
+        .map(|s| s.dirty(app.runtime.scene()))
+        .unwrap_or(false);
+    if let Some(state) = app.grab_pose_editor.as_mut() {
+        if dirty {
+            state.confirm_exit = true;
+        } else {
+            close(app);
+        }
+    }
+}
+
+/// Confirm dialog "Exit": throw away everything since the last save.
+pub(crate) fn exit_discard(app: &mut App) {
+    if let Some(state) = app.grab_pose_editor.as_ref() {
+        let saved = state.saved.clone();
+        let obj_id = state.object_id.clone();
+        if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
+            saved.restore(obj);
+        }
+    }
+    close(app);
+}
+
+/// Confirm dialog "Save then Exit".
+pub(crate) fn exit_save(app: &mut App) {
+    save(app);
+    close(app);
+}
+
+/// Confirm dialog "Return": stay in the editor.
+pub(crate) fn cancel_exit(app: &mut App) {
+    if let Some(state) = app.grab_pose_editor.as_mut() {
+        state.confirm_exit = false;
+    }
+}
+
+/// Point the camera back at the object (drawn at the origin) after
+/// panning/zooming away.
+pub(crate) fn recenter_view(app: &mut App) {
+    let Some(state) = app.grab_pose_editor.as_ref() else {
+        return;
+    };
     let framing = app
         .runtime
         .scene()
-        .find_object(&object_id)
+        .find_object(&state.object_id)
         .map(|o| o.cuboid.half_size.length().max(0.05))
         .unwrap_or(0.3);
-
-    app.grab_pose_gizmo = TransformGizmo::new();
-    app.grab_pose_editor = Some(GrabPoseEditorState::new(object_id, framing));
-}
-
-pub(crate) fn close(app: &mut App) {
-    app.grab_pose_editor = None;
+    if let Some(state) = app.grab_pose_editor.as_mut() {
+        state.orbit.refocus(Vec3::ZERO, framing);
+    }
 }
 
 pub(crate) fn ensure_hand_meshes_loaded(
@@ -206,6 +390,16 @@ pub(crate) fn ensure_hand_meshes_loaded(
     }
 }
 
+/// The active point, only when the current hand view shows it (a handed view
+/// with no points of that hand leaves nothing to edit or preview).
+fn visible_active_point<'a>(state: &GrabPoseEditorState, scene: &'a Scene) -> Option<&'a GripPointDef> {
+    scene
+        .find_object(&state.object_id)?
+        .grip_points
+        .get(state.active_point)
+        .filter(|p| state.hand_view.shows(p))
+}
+
 pub(crate) fn update_transforms(
     state: &GrabPoseEditorState,
     scene: &Scene,
@@ -215,7 +409,7 @@ pub(crate) fn update_transforms(
     let Some(obj) = scene.find_object(&state.object_id) else {
         return;
     };
-    let reference = reference_transform(state.preview_rotation);
+    let reference = reference_transform();
 
     if let Some(mesh_ref) = &obj.mesh {
         if let Some((mesh, _)) = mesh_cache.get_mut(&mesh_ref.path) {
@@ -226,10 +420,10 @@ pub(crate) fn update_transforms(
         }
     }
 
-    let Some(point) = obj.grip_points.get(state.active_point) else {
+    let Some(point) = visible_active_point(state, scene) else {
         return;
     };
-    let hand_key = hand_cache_key(state.preview_hand);
+    let hand_key = hand_cache_key(point.hand);
     // The hand's world placement (grip root + preview scale) is baked entirely
     // into the joint matrices below. The skinned shader computes
     // `world = model * (joints * pos)`, so the mesh's own model matrix MUST stay
@@ -268,7 +462,7 @@ pub(crate) fn collect_cuboids(state: &GrabPoseEditorState, scene: &Scene) -> Vec
         return Vec::new();
     };
 
-    let reference = reference_transform(state.preview_rotation);
+    let reference = reference_transform();
     let mut out = Vec::new();
 
     if obj.mesh.is_none() {
@@ -284,9 +478,10 @@ pub(crate) fn collect_cuboids(state: &GrabPoseEditorState, scene: &Scene) -> Vec
     }
 
     for (i, point) in obj.grip_points.iter().enumerate() {
-        // The active point shows the posed hand instead of a marker cube — only
-        // the other (unselected) points get a cube so they stay visible/pickable.
-        if i == state.active_point {
+        // The hand view filters what shows (organization only). The active
+        // point shows the posed hand instead of a marker cube — only the other
+        // (unselected) points get a cube so they stay visible/pickable.
+        if !state.hand_view.shows(point) || i == state.active_point {
             continue;
         }
         let root = point_root(reference, point);
@@ -315,227 +510,160 @@ pub(crate) fn collect_mesh_instances<'a>(
         }
     }
 
-    if obj.grip_points.get(state.active_point).is_some() {
-        if let Some((mesh, model)) = mesh_cache.get(&hand_cache_key(state.preview_hand)) {
+    if let Some(point) = visible_active_point(state, scene) {
+        if let Some((mesh, model)) = mesh_cache.get(&hand_cache_key(point.hand)) {
             out.push(MeshInstance { mesh, model });
         }
     }
     out
 }
 
-/// Kept for a possible future re-enable; the grab pose editor no longer shows or drives this
-/// gizmo in its viewport, so nothing currently calls this.
-#[allow(dead_code)]
-pub(crate) fn sync_gizmo(app: &mut App) {
-    let Some(state) = &app.grab_pose_editor else {
-        return;
-    };
-    if state.preview_mode {
-        return;
-    }
-    let obj_id = state.object_id.clone();
-    let active_point = state.active_point;
-    let preview_rotation = state.preview_rotation;
-    let is_dragging = app.gizmo_dragging;
+// ---------------------------------------------------------------------------
+// Undo/redo plumbing — every mutation goes through `with_edit`, which
+// snapshots the whole grip-point list (so add/delete/rename/kind are
+// undoable too, not just pose fields). Note edits do NOT mark the scene
+// dirty: that happens on save (exiting without saving restores everything).
+// ---------------------------------------------------------------------------
 
-    let Some(obj) = app.runtime.scene().find_object(&obj_id) else {
-        return;
-    };
-    let Some(point) = obj.grip_points.get(active_point) else {
-        return;
-    };
-    let reference = reference_transform(preview_rotation);
-    let root = point_root(reference, point);
-    let (_, rot, pos) = root.to_scale_rotation_translation();
-    let scale = Vec3::from(point.hand_offset_scale);
-
-    if !is_dragging {
-        app.grab_pose_gizmo.set_position(pos);
-        app.grab_pose_gizmo.set_rotation(rot);
-        app.grab_pose_gizmo.set_scale(scale);
-    }
+fn with_edit(app: &mut App, f: impl FnOnce(&mut GameObject, &mut GrabPoseEditorState)) {
+    with_edit_coalesced(app, None, f);
 }
 
-/// Kept alongside `sync_gizmo` for a possible future re-enable; currently unused.
-#[allow(dead_code)]
-pub(crate) fn apply_gizmo_drag(app: &mut App) {
-    let Some(state) = &app.grab_pose_editor else {
+/// Like `with_edit`, but when `token` matches the drag already folding into the
+/// top undo entry, the entry's `after` is extended in place rather than pushing
+/// a new one. Keeps a whole drag as one undoable step so undo isn't reduced to
+/// nudging back single frames (which also used to evict older real edits).
+fn with_edit_coalesced(
+    app: &mut App,
+    token: Option<EditKey>,
+    f: impl FnOnce(&mut GameObject, &mut GrabPoseEditorState),
+) {
+    let Some(mut state) = app.grab_pose_editor.take() else {
         return;
     };
     let obj_id = state.object_id.clone();
-    let active_point = state.active_point;
-    let pos_snap = state.pos_snap;
-    let rot_snap_deg = state.rot_snap_deg;
-    let mode = app.grab_pose_gizmo.mode;
-
-    let mut gizmo_pos = app.grab_pose_gizmo.get_position();
-    let mut gizmo_rot = app.grab_pose_gizmo.get_rotation();
-    let gizmo_scale = app.grab_pose_gizmo.get_scale();
-
-    if mode == GizmoMode::Translate {
-        if let Some(step) = pos_snap {
-            gizmo_pos = snap_vec3(gizmo_pos, step);
-        }
-    } else if mode == GizmoMode::Rotate {
-        if let Some(step) = rot_snap_deg {
-            gizmo_rot = snap_rotation(gizmo_rot, step);
-        }
-    }
-
-    let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) else {
-        return;
-    };
-    let reference = reference_transform(Quat::IDENTITY);
-    let Some(point) = obj.grip_points.get_mut(active_point) else {
-        return;
-    };
-
-    match mode {
-        GizmoMode::Translate | GizmoMode::Rotate => {
-            let root = Mat4::from_rotation_translation(gizmo_rot, gizmo_pos);
-            let offset_mat = reference.inverse() * root;
-            let (_, rot, pos) = offset_mat.to_scale_rotation_translation();
-            point.local_pos = pos.to_array();
-            point.local_rot = rot.to_array();
-        }
-        GizmoMode::Scale => {
-            point.hand_offset_scale = gizmo_scale.to_array();
-        }
-    }
-    app.scene_dirty = true;
-}
-
-fn snap_vec3(v: Vec3, step: f32) -> Vec3 {
-    if step <= 0.0 {
-        return v;
-    }
-    Vec3::new(
-        (v.x / step).round() * step,
-        (v.y / step).round() * step,
-        (v.z / step).round() * step,
-    )
-}
-
-fn snap_rotation(q: Quat, step_deg: f32) -> Quat {
-    if step_deg <= 0.0 {
-        return q;
-    }
-    let (ex, ey, ez) = q.to_euler(EulerRot::YXZ);
-    let snap = |a: f32| (a.to_degrees() / step_deg).round() * step_deg;
-    Quat::from_euler(
-        EulerRot::YXZ,
-        snap(ey).to_radians(),
-        snap(ex).to_radians(),
-        snap(ez).to_radians(),
-    )
-}
-
-pub(crate) fn begin_drag_snapshot(app: &mut App) {
-    let (obj_id, active_point) = {
-        let Some(state) = app.grab_pose_editor.as_ref() else {
-            return;
-        };
-        (state.object_id.clone(), state.active_point)
-    };
-    let before = app
-        .runtime
-        .scene()
-        .find_object(&obj_id)
-        .and_then(|o| o.grip_points.get(active_point).cloned());
-    if let Some(state) = app.grab_pose_editor.as_mut() {
-        state.drag_before = before;
-    }
-}
-
-pub(crate) fn end_drag_commit(app: &mut App) {
-    let (obj_id, active_point, before) = {
-        let Some(state) = app.grab_pose_editor.as_ref() else {
-            return;
-        };
-        let Some(before) = state.drag_before.clone() else {
-            return;
-        };
-        (state.object_id.clone(), state.active_point, before)
-    };
-    let after = app
-        .runtime
-        .scene()
-        .find_object(&obj_id)
-        .and_then(|o| o.grip_points.get(active_point).cloned());
-    if let Some(state) = app.grab_pose_editor.as_mut() {
-        state.drag_before = None;
-        if let Some(after) = after {
-            let changed = before.local_pos != after.local_pos
-                || before.local_rot != after.local_rot
-                || before.hand_offset_scale != after.hand_offset_scale
-                || before.finger_curl != after.finger_curl;
-            if changed {
-                state.undo.push(GrabPointEdit {
-                    point_index: active_point,
+    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
+        let before = GripUndoState::capture(obj, &state);
+        f(obj, &mut state);
+        let after = GripUndoState::capture(obj, &state);
+        if before != after {
+            let merge = token.is_some()
+                && state.active_coalesce == token
+                && state.redo.is_empty()
+                && state.undo.last().map_or(false, |e| e.coalesce == token);
+            if merge {
+                state.undo.last_mut().unwrap().after = after;
+            } else {
+                state.undo.push(GripEdit {
                     before,
                     after,
+                    coalesce: token,
                 });
+                if state.undo.len() > UNDO_CAP {
+                    state.undo.remove(0);
+                }
                 state.redo.clear();
             }
+            state.active_coalesce = token;
         }
+        state.active_point = state.active_point.min(obj.grip_points.len().saturating_sub(1));
     }
-}
-
-pub(crate) fn reset_active_point(app: &mut App) {
-    begin_drag_snapshot(app);
-    let (obj_id, active_point) = {
-        let Some(state) = app.grab_pose_editor.as_ref() else {
-            return;
-        };
-        (state.object_id.clone(), state.active_point)
-    };
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(active_point) {
-            let name = point.name.clone();
-            let kind = point.kind;
-            *point = GripPointDef {
-                name,
-                kind,
-                ..default_grip_point(&[])
-            };
-            app.scene_dirty = true;
-        }
-    }
-    end_drag_commit(app);
+    app.grab_pose_editor = Some(state);
 }
 
 pub(crate) fn undo(app: &mut App) {
-    let (edit, obj_id) = {
-        let Some(state) = app.grab_pose_editor.as_mut() else {
-            return;
-        };
-        let Some(edit) = state.undo.pop() else { return };
-        state.redo.push(edit.clone());
-        (edit, state.object_id.clone())
+    let Some(mut state) = app.grab_pose_editor.take() else {
+        return;
     };
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(edit.point_index) {
-            *point = edit.before;
-            app.scene_dirty = true;
+    if let Some(edit) = state.undo.pop() {
+        let obj_id = state.object_id.clone();
+        if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
+            edit.before.restore(obj, &mut state);
+            state.active_point = state.active_point.min(obj.grip_points.len().saturating_sub(1));
         }
+        state.redo.push(edit);
     }
+    state.rot_edit = None;
+    state.active_coalesce = None;
+    app.grab_pose_editor = Some(state);
 }
 
 pub(crate) fn redo(app: &mut App) {
-    let (edit, obj_id) = {
-        let Some(state) = app.grab_pose_editor.as_mut() else {
+    let Some(mut state) = app.grab_pose_editor.take() else {
+        return;
+    };
+    if let Some(edit) = state.redo.pop() {
+        let obj_id = state.object_id.clone();
+        if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
+            edit.after.restore(obj, &mut state);
+            state.active_point = state.active_point.min(obj.grip_points.len().saturating_sub(1));
+        }
+        state.undo.push(edit);
+    }
+    state.rot_edit = None;
+    state.active_coalesce = None;
+    app.grab_pose_editor = Some(state);
+}
+
+// ---------------------------------------------------------------------------
+// Snap tool settings — routed through `with_edit` so they're undoable too.
+// ---------------------------------------------------------------------------
+
+pub(crate) fn set_pos_snap(app: &mut App, snap: Option<f32>) {
+    with_edit(app, |_, state| state.pos_snap = snap);
+}
+
+pub(crate) fn set_rot_snap(app: &mut App, snap: Option<f32>) {
+    with_edit(app, |_, state| state.rot_snap_deg = snap);
+}
+
+pub(crate) fn set_pos_snap_step(app: &mut App, step: f32) {
+    let token = Some(EditKey(usize::MAX, POS_SNAP_STEP_CODE));
+    with_edit_coalesced(app, token, |_, state| state.pos_snap = Some(step));
+}
+
+pub(crate) fn set_rot_snap_step(app: &mut App, step: f32) {
+    let token = Some(EditKey(usize::MAX, ROT_SNAP_STEP_CODE));
+    with_edit_coalesced(app, token, |_, state| state.rot_snap_deg = Some(step));
+}
+
+// ---------------------------------------------------------------------------
+// Grip point operations
+// ---------------------------------------------------------------------------
+
+pub(crate) fn apply_finger_curl(app: &mut App, group_idx: usize, value: f32) {
+    let token = app
+        .grab_pose_editor
+        .as_ref()
+        .map(|s| EditKey(s.active_point, FINGER_FIELD_BASE + group_idx as u8));
+    with_edit_coalesced(app, token, |obj, state| {
+        let Some(point) = obj.grip_points.get_mut(state.active_point) else {
             return;
         };
-        let Some(edit) = state.redo.pop() else { return };
-        state.undo.push(edit.clone());
-        (edit, state.object_id.clone())
-    };
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(edit.point_index) {
-            *point = edit.after;
-            app.scene_dirty = true;
+        let Some((_, bones)) = FINGER_GROUPS.get(group_idx) else {
+            return;
+        };
+        let v = value.clamp(0.0, 1.0);
+        for bone in *bones {
+            point.finger_curl.insert(bone.to_string(), v);
         }
-    }
+    });
+}
+
+pub(crate) fn reset_active_point(app: &mut App) {
+    with_edit(app, |obj, state| {
+        state.rot_edit = None;
+        if let Some(point) = obj.grip_points.get_mut(state.active_point) {
+            let name = point.name.clone();
+            let kind = point.kind;
+            let hand = point.hand;
+            *point = GripPointDef {
+                name,
+                kind,
+                ..default_grip_point(&[], hand)
+            };
+        }
+    });
 }
 
 pub(crate) fn select_point(app: &mut App, index: usize) {
@@ -551,135 +679,124 @@ pub(crate) fn select_point(app: &mut App, index: usize) {
         .unwrap_or(0);
     if let Some(state) = app.grab_pose_editor.as_mut() {
         state.active_point = index.min(len.saturating_sub(1));
+        state.rot_edit = None;
     }
 }
 
-pub(crate) fn add_point(app: &mut App) {
-    let Some(state) = app.grab_pose_editor.as_ref() else {
+/// Switch the hand view; keeps the selection on a point that view can show.
+pub(crate) fn set_hand_view(app: &mut App, view: HandView) {
+    let Some(state) = app.grab_pose_editor.as_mut() else {
         return;
     };
+    state.hand_view = view;
     let obj_id = state.object_id.clone();
-    let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) else {
-        return;
-    };
-    let point = default_grip_point(&obj.grip_points);
-    obj.grip_points.push(point);
-    let new_index = obj.grip_points.len() - 1;
-    if let Some(state) = app.grab_pose_editor.as_mut() {
-        state.active_point = new_index;
+    let active = state.active_point;
+    let reselect = app.runtime.scene().find_object(&obj_id).and_then(|obj| {
+        match obj.grip_points.get(active) {
+            Some(p) if view.shows(p) => None,
+            _ => obj.grip_points.iter().position(|p| view.shows(p)),
+        }
+    });
+    if let (Some(i), Some(state)) = (reselect, app.grab_pose_editor.as_mut()) {
+        state.active_point = i;
+        state.rot_edit = None;
     }
-    app.scene_dirty = true;
+}
+
+pub(crate) fn add_point(app: &mut App, hand: Hand) {
+    with_edit(app, |obj, state| {
+        let point = default_grip_point(&obj.grip_points, hand);
+        obj.grip_points.push(point);
+        state.active_point = obj.grip_points.len() - 1;
+        state.rot_edit = None;
+        // Jump the view to where the new point lives, so it never lands
+        // somewhere the current view hides.
+        if state.hand_view != HandView::All {
+            state.hand_view = match hand {
+                Hand::Left => HandView::Left,
+                Hand::Right => HandView::Right,
+            };
+        }
+    });
 }
 
 pub(crate) fn delete_active_point(app: &mut App) {
-    let Some(state) = app.grab_pose_editor.as_ref() else {
-        return;
-    };
-    let obj_id = state.object_id.clone();
-    let active_point = state.active_point;
-    let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) else {
-        return;
-    };
-    if obj.grip_points.len() <= 1 {
-        return;
-    }
-    obj.grip_points.remove(active_point);
-    if let Some(state) = app.grab_pose_editor.as_mut() {
-        state.active_point = active_point.min(obj.grip_points.len() - 1);
-        state.undo.clear();
-        state.redo.clear();
-    }
-    app.scene_dirty = true;
+    with_edit(app, |obj, state| {
+        if obj.grip_points.len() <= 1 {
+            return;
+        }
+        obj.grip_points.remove(state.active_point);
+        state.rot_edit = None;
+    });
 }
 
 pub(crate) fn rename_active_point(app: &mut App, new_name: String) {
-    let trimmed = new_name.trim();
+    let trimmed = new_name.trim().to_string();
     if trimmed.is_empty() {
         return;
     }
-    let Some(state) = app.grab_pose_editor.as_ref() else {
-        return;
-    };
-    let obj_id = state.object_id.clone();
-    let active_point = state.active_point;
-    let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) else {
-        return;
-    };
-    if obj
-        .grip_points
-        .iter()
-        .enumerate()
-        .any(|(i, p)| i != active_point && p.name == trimmed)
-    {
-        return;
-    }
-    if let Some(point) = obj.grip_points.get_mut(active_point) {
-        point.name = trimmed.to_string();
-        app.scene_dirty = true;
-    }
+    with_edit(app, |obj, state| {
+        let taken = obj
+            .grip_points
+            .iter()
+            .enumerate()
+            .any(|(i, p)| i != state.active_point && p.name == trimmed);
+        if taken {
+            return;
+        }
+        if let Some(point) = obj.grip_points.get_mut(state.active_point) {
+            point.name = trimmed;
+        }
+    });
 }
 
 pub(crate) fn set_active_point_kind(app: &mut App, kind: GripKind) {
-    let Some(state) = app.grab_pose_editor.as_ref() else {
-        return;
-    };
-    let obj_id = state.object_id.clone();
-    let active_point = state.active_point;
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(active_point) {
+    with_edit(app, |obj, state| {
+        if let Some(point) = obj.grip_points.get_mut(state.active_point) {
             point.kind = kind;
-            app.scene_dirty = true;
         }
-    }
-}
-
-pub(crate) fn preview_drag(app: &mut App, dx: f32, dy: f32) {
-    if let Some(state) = app.grab_pose_editor.as_mut() {
-        let yaw = Quat::from_rotation_y(-dx * 0.006);
-        let pitch = Quat::from_rotation_x(-dy * 0.006);
-        state.preview_rotation = yaw * pitch * state.preview_rotation;
-    }
+    });
 }
 
 #[derive(Clone, Copy)]
 pub(crate) enum PoseField {
     Pos(usize),
+    /// Euler degrees, axis-indexed [X, Y, Z] (stored back via YXZ order).
     Rot(usize),
     Scale(usize),
 }
 
 pub(crate) fn apply_field_edit(app: &mut App, field: PoseField, value: f32) {
-    begin_drag_snapshot(app);
-    let (obj_id, active_point) = {
-        let Some(state) = app.grab_pose_editor.as_ref() else {
+    // Fold this field's drag frames into one undo entry.
+    let token = app
+        .grab_pose_editor
+        .as_ref()
+        .map(|s| EditKey(s.active_point, field_code(field)));
+    with_edit_coalesced(app, token, |obj, state| {
+        let Some(point) = obj.grip_points.get_mut(state.active_point) else {
             return;
         };
-        (state.object_id.clone(), state.active_point)
-    };
-    if let Some(obj) = app.runtime.scene_mut().find_object_mut(&obj_id) {
-        if let Some(point) = obj.grip_points.get_mut(active_point) {
-            match field {
-                PoseField::Pos(i) => point.local_pos[i] = value,
-                PoseField::Rot(i) => {
-                    let q = Quat::from_array(point.local_rot);
-                    // glam returns YXZ euler in (Y, X, Z) order — store it
-                    // axis-indexed as [X, Y, Z] so field i maps to one stable
-                    // axis (otherwise editing X also drags Y).
-                    let (ey, ex, ez) = q.to_euler(EulerRot::YXZ);
-                    let mut deg = [ex.to_degrees(), ey.to_degrees(), ez.to_degrees()];
-                    deg[i] = value;
-                    let nq = Quat::from_euler(
-                        EulerRot::YXZ,
-                        deg[1].to_radians(), // Y
-                        deg[0].to_radians(), // X
-                        deg[2].to_radians(), // Z
-                    );
-                    point.local_rot = nq.to_array();
-                }
-                PoseField::Scale(i) => point.hand_offset_scale[i] = value,
+        match field {
+            PoseField::Pos(i) => point.local_pos[i] = value,
+            PoseField::Rot(i) => {
+                // Axis-indexed [X, Y, Z]; glam's YXZ decomposition returns
+                // (Y, X, Z), rebuilt below in that order. The sticky euler from
+                // `euler_for_point` keeps the axes independent while editing —
+                // re-decomposing the quat every frame collapses Y and Z near
+                // the X = ±90° gimbal lock (they'd move together).
+                let q = Quat::from_array(point.local_rot);
+                let mut deg = state.euler_for_point(state.active_point, q);
+                deg[i] = value;
+                let nq = Quat::from_euler(
+                    EulerRot::YXZ,
+                    deg[1].to_radians(), // Y
+                    deg[0].to_radians(), // X
+                    deg[2].to_radians(), // Z
+                );
+                point.local_rot = nq.to_array();
+                state.rot_edit = Some((state.active_point, deg));
             }
-            app.scene_dirty = true;
+            PoseField::Scale(i) => point.hand_offset_scale[i] = value,
         }
-    }
-    end_drag_commit(app);
+    });
 }

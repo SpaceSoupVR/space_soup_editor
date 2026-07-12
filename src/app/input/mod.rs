@@ -3,7 +3,7 @@ pub(crate) mod keyboard;
 pub(crate) mod mouse;
 pub(crate) mod resize;
 
-use winit::event::{ElementState, WindowEvent};
+use winit::event::WindowEvent;
 use winit::event_loop::ActiveEventLoop;
 use winit::window::WindowId;
 
@@ -28,10 +28,14 @@ pub(crate) fn handle_window_event(
         }
 
         WindowEvent::KeyboardInput { event, .. } => {
-            if event.state == ElementState::Pressed {
-                keyboard::handle_key(app, &event);
-                app.redraw_now();
-            }
+            keyboard::handle_key_event(app, &event);
+            app.redraw_now();
+        }
+
+        // Dropping focus can swallow key-release events; clear held fly keys so
+        // the camera doesn't drift.
+        WindowEvent::Focused(false) => {
+            app.fly.clear();
         }
 
         WindowEvent::CursorMoved { position, .. } => {

@@ -6,7 +6,6 @@ use agate::{AMouseButton, Theme};
 
 use crate::transform_gizmo::{Axis, GizmoMode};
 
-use super::super::grab_pose_editor;
 use super::super::layout::{in_rect, Layout};
 use super::super::picking::ray_plane_intersect;
 use super::super::render::scene::GIZMO_ANCHOR_MARGIN;
@@ -29,7 +28,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     app.mouse_pos = new;
 
     if app.grab_pose_editor.is_some() {
-        grab_pose_cursor_moved(app, new, dx, dy);
+        grab_pose_cursor_moved(app, dx, dy);
         return;
     }
     if app.anim_sim_editor.is_some() {
@@ -175,27 +174,13 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
     app.scene_dirty = true;
 }
 
-fn grab_pose_cursor_moved(app: &mut App, _new: (f32, f32), dx: f32, dy: f32) {
-    let preview_mode = app
-        .grab_pose_editor
-        .as_ref()
-        .map(|s| s.preview_mode)
-        .unwrap_or(false);
-
-    if app.left_down {
-        if preview_mode {
-            if !app.press_in_chrome {
-                grab_pose_editor::preview_drag(app, dx, dy);
-                app.dragged = true;
-            }
-        } else if !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
-            app.dragged = true;
-            if let Some(state) = app.grab_pose_editor.as_mut() {
-                state.orbit.orbit(dx, dy);
-            }
+fn grab_pose_cursor_moved(app: &mut App, dx: f32, dy: f32) {
+    if app.left_down && !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
+        app.dragged = true;
+        if let Some(state) = app.grab_pose_editor.as_mut() {
+            state.orbit.orbit(dx, dy);
         }
     }
-
     app.redraw_now();
 }
 

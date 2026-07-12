@@ -110,6 +110,8 @@ pub(crate) struct App {
     pub(crate) last_mouse_pos: (f32, f32),
     pub(crate) left_down: bool,
     pub(crate) dragged: bool,
+    /// Which WASDQE fly keys are held (base-editor free-look movement).
+    pub(crate) fly: edit_camera::FlyInput,
 
     pub(crate) scene_dirty: bool,
 
@@ -139,13 +141,18 @@ pub(crate) struct App {
     pub(crate) snap_joint_frame: Vec<snap::SnapJoint>,
 
     pub(crate) grab_pose_editor: Option<grab_pose_editor::GrabPoseEditorState>,
-    pub(crate) grab_pose_gizmo: TransformGizmo,
 
     pub(crate) anim_sim_editor: Option<anim_sim_editor::AnimSimEditorState>,
     /// Cross-object clipboards so animations/keyframes survive closing and
     /// reopening the anim-sim editor on another object.
     pub(crate) anim_clipboard: Option<space_soup_engine::Animation>,
     pub(crate) keyframe_clipboard: Option<space_soup_engine::Keyframe>,
+
+    /// Sticky euler for the inspector rotation drag in progress:
+    /// `(object_id, [x, y, z] degrees)`. Cleared on any frame without a
+    /// rotation drag; while dragging it keeps the three axes independent
+    /// instead of re-decomposing the quat (gimbal lock collapses Y/Z).
+    pub(crate) inspector_rot_edit: Option<(String, [f32; 3])>,
 }
 
 impl App {
@@ -200,6 +207,7 @@ impl App {
             last_mouse_pos: (0.0, 0.0),
             left_down: false,
             dragged: false,
+            fly: edit_camera::FlyInput::default(),
 
             scene_dirty: false,
 
@@ -227,11 +235,11 @@ impl App {
             snap_joint_frame: Vec::new(),
 
             grab_pose_editor: None,
-            grab_pose_gizmo: TransformGizmo::new(),
 
             anim_sim_editor: None,
             anim_clipboard: None,
             keyframe_clipboard: None,
+            inspector_rot_edit: None,
         }
     }
 

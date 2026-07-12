@@ -1,13 +1,74 @@
-use winit::event::KeyEvent;
+use winit::event::{ElementState, KeyEvent};
 use winit::keyboard::{Key, NamedKey};
-
-use crate::transform_gizmo::GizmoMode;
 
 use super::super::anim_sim_editor;
 use super::super::discover::winit_key_to_agate;
 use super::super::grab_pose_editor;
 use super::super::snap;
-use super::super::{App, EditorTool};
+use super::super::{App, EditorTool, ViewMode};
+
+/// Entry point for every key press *and release*. In the base-editor viewport
+/// WASDQE (+ Space/Ctrl) fly the camera: those keys update the held-key state
+/// (and are consumed) whenever fly mode is live. Everything else is handled on
+/// press only.
+pub(crate) fn handle_key_event(app: &mut App, event: &KeyEvent) {
+    let pressed = event.state == ElementState::Pressed;
+    if fly_active(app) {
+        if let Some(dir) = fly_dir(&event.logical_key) {
+            match dir {
+                FlyDir::Forward => app.fly.forward = pressed,
+                FlyDir::Back => app.fly.back = pressed,
+                FlyDir::Left => app.fly.left = pressed,
+                FlyDir::Right => app.fly.right = pressed,
+                FlyDir::Up => app.fly.up = pressed,
+                FlyDir::Down => app.fly.down = pressed,
+            }
+            return;
+        }
+    }
+    if pressed {
+        handle_key(app, event);
+    }
+}
+
+/// Fly the base-editor camera only in the plain edit viewport — not while a
+/// sub-editor is open or a text field / code editor has focus (so typing is
+/// never eaten).
+fn fly_active(app: &App) -> bool {
+    let typing = app.editing.is_some()
+        || app.ui.as_ref().map(|u| u.text_focused()).unwrap_or(false);
+    app.view_mode == ViewMode::Edit
+        && app.grab_pose_editor.is_none()
+        && app.anim_sim_editor.is_none()
+        && !typing
+}
+
+enum FlyDir {
+    Forward,
+    Back,
+    Left,
+    Right,
+    Up,
+    Down,
+}
+
+/// Maps a fly key to a direction. W/A/S/D move; E/Space go up, Q/Ctrl go down.
+fn fly_dir(key: &Key) -> Option<FlyDir> {
+    match key {
+        Key::Character(s) => match s.as_str() {
+            "w" | "W" => Some(FlyDir::Forward),
+            "s" | "S" => Some(FlyDir::Back),
+            "a" | "A" => Some(FlyDir::Left),
+            "d" | "D" => Some(FlyDir::Right),
+            "e" | "E" => Some(FlyDir::Up),
+            "q" | "Q" => Some(FlyDir::Down),
+            _ => None,
+        },
+        Key::Named(NamedKey::Space) => Some(FlyDir::Up),
+        Key::Named(NamedKey::Control) => Some(FlyDir::Down),
+        _ => None,
+    }
+}
 
 pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     if app.grab_pose_editor.is_some() {
@@ -36,10 +97,9 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     }
     if !cmd {
         if let Key::Character(s) = &event.logical_key {
+            // W/E/R are the WASDQE fly keys (handled in handle_key_event); the
+            // gizmo modes live on the viewport toolbar instead.
             match s.as_str() {
-                "w" | "W" => app.xform_gizmo.mode = GizmoMode::Translate,
-                "e" | "E" => app.xform_gizmo.mode = GizmoMode::Rotate,
-                "r" | "R" => app.xform_gizmo.mode = GizmoMode::Scale,
                 "g" | "G" if app.tool == EditorTool::Rigging && app.rig_selection.len() == 1 => {
                     let id = app.rig_selection[0].clone();
                     snap::seed_grip_pose(app.runtime.scene_mut(), &id, app.snap_hand, None);
@@ -59,19 +119,59 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
 fn grab_pose_key(app: &mut App, ev: &KeyEvent) {
     let cmd = app.mods.super_key() || app.mods.control_key();
     let shift = app.mods.shift_key();
+    let text_focused = app
+        .ui
+        .as_ref()
+        .map(|u| u.text_focused())
+        .unwrap_or(false);
+
     match &ev.logical_key {
-        Key::Named(NamedKey::Escape) => grab_pose_editor::close(app),
-        Key::Character(s) if cmd => match s.as_str() {
-            "z" | "Z" => {
-                if shift {
-                    grab_pose_editor::redo(app)
-                } else {
-                    grab_pose_editor::undo(app)
+        Key::Named(NamedKey::Escape) => {
+            let confirming = app
+                .grab_pose_editor
+                .as_ref()
+                .map(|s| s.confirm_exit)
+                .unwrap_or(false);
+            if confirming {
+                grab_pose_editor::cancel_exit(app);
+            } else {
+                grab_pose_editor::request_exit(app);
+            }
+            app.redraw_now();
+            return;
+        }
+        Key::Character(s) if cmd => {
+            match s.as_str() {
+                "z" | "Z" => {
+                    if shift {
+                        grab_pose_editor::redo(app)
+                    } else {
+                        grab_pose_editor::undo(app)
+                    }
+                }
+                _ => {}
+            }
+            app.redraw_now();
+            return;
+        }
+        _ => {}
+    }
+
+    if text_focused {
+        // Route typing into the focused panel text input (e.g. the point name
+        // field) — without this, characters never reach the UI here.
+        if !cmd {
+            if let Some(txt) = &ev.text {
+                for ch in txt.chars() {
+                    if !ch.is_control() {
+                        app.text_input.push(ch);
+                    }
                 }
             }
-            _ => {}
-        },
-        _ => {}
+        }
+        if let Some(nk) = winit_key_to_agate(&ev.logical_key) {
+            app.named_keys.push(nk);
+        }
     }
     app.redraw_now();
 }

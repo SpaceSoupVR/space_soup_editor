@@ -1,5 +1,27 @@
 use glam::{EulerRot, Quat, Vec3};
 
+/// Which WASDQE fly keys are currently held. Unreal-style: only live while the
+/// right mouse button is held over the base-editor viewport.
+#[derive(Default)]
+pub(crate) struct FlyInput {
+    pub forward: bool,
+    pub back: bool,
+    pub left: bool,
+    pub right: bool,
+    pub up: bool,
+    pub down: bool,
+}
+
+impl FlyInput {
+    pub fn clear(&mut self) {
+        *self = Self::default();
+    }
+
+    fn any(&self) -> bool {
+        self.forward || self.back || self.left || self.right || self.up || self.down
+    }
+}
+
 pub(crate) struct EditCamera {
     pub position: Vec3,
     pub yaw: f32,
@@ -42,5 +64,37 @@ impl EditCamera {
 
     pub fn dolly(&mut self, d: f32) {
         self.position += self.forward() * d;
+    }
+
+    /// Advance the camera from held fly keys. `forward`/`back` follow the view
+    /// (with pitch); `left`/`right` strafe horizontally; `up`/`down` are world
+    /// vertical. `fast` (Shift) speeds it up. No-op when nothing is held.
+    pub fn fly(&mut self, m: &FlyInput, dt: f32, fast: bool) {
+        if !m.any() {
+            return;
+        }
+        let mut dir = Vec3::ZERO;
+        if m.forward {
+            dir += self.forward();
+        }
+        if m.back {
+            dir -= self.forward();
+        }
+        if m.right {
+            dir += self.right();
+        }
+        if m.left {
+            dir -= self.right();
+        }
+        if m.up {
+            dir += Vec3::Y;
+        }
+        if m.down {
+            dir -= Vec3::Y;
+        }
+        if dir.length_squared() > 1e-6 {
+            let speed = if fast { 9.0 } else { 3.0 };
+            self.position += dir.normalize() * speed * dt;
+        }
     }
 }

@@ -1,4 +1,5 @@
 pub(crate) mod anim_sim_panel;
+pub(crate) mod confirm;
 pub(crate) mod grab_pose_panel;
 pub(crate) mod inspector;
 pub(crate) mod navigator;
@@ -22,6 +23,19 @@ use super::grab_pose_editor;
 use super::layout::Layout;
 use super::snap;
 use super::{EditTarget, EditorTool, ViewMode};
+
+/// Splits a row rect into a fixed-width label cell and the remaining input cell.
+/// Shared by the inspector and the sub-editor panels.
+pub(crate) fn split_row(row: [f32; 4], label_w: f32, field_gap: f32) -> ([f32; 4], [f32; 4]) {
+    let label_r = [row[0], row[1], label_w, row[3]];
+    let input_r = [
+        row[0] + label_w + field_gap,
+        row[1],
+        row[2] - label_w - field_gap,
+        row[3],
+    ];
+    (label_r, input_r)
+}
 
 impl super::App {
     pub(crate) fn redraw(&mut self) {
@@ -163,6 +177,9 @@ impl super::App {
                 self.camera.rotation = head_rot;
             }
             ViewMode::Edit => {
+                // WASDQE free-look fly (keys are gated in keyboard::fly_active;
+                // Shift = faster). Harmless when nothing is held.
+                self.edit_camera.fly(&self.fly, dt, self.mods.shift_key());
                 self.camera.position = self.edit_camera.position;
                 self.camera.rotation = self.edit_camera.rotation();
             }
@@ -416,6 +433,8 @@ impl super::App {
             &mut open_grab_pose_editor,
             &mut open_anim_sim_editor,
             &mut self.inspector_content_height,
+            self.view_mode == ViewMode::Edit,
+            &mut self.inspector_rot_edit,
             &packet,
         );
         self.scene_dirty = scene_dirty;
@@ -605,8 +624,37 @@ impl super::App {
             vec![]
         };
 
-        if actions.close {
-            grab_pose_editor::close(self);
+        if actions.save {
+            grab_pose_editor::save(self);
+        }
+        if actions.request_exit {
+            grab_pose_editor::request_exit(self);
+        }
+        if actions.exit_discard {
+            grab_pose_editor::exit_discard(self);
+            return;
+        }
+        if actions.exit_save {
+            grab_pose_editor::exit_save(self);
+            return;
+        }
+        if actions.cancel_exit {
+            grab_pose_editor::cancel_exit(self);
+        }
+        if actions.recenter {
+            grab_pose_editor::recenter_view(self);
+        }
+        if let Some(snap) = actions.set_pos_snap {
+            grab_pose_editor::set_pos_snap(self, snap);
+        }
+        if let Some(snap) = actions.set_rot_snap {
+            grab_pose_editor::set_rot_snap(self, snap);
+        }
+        if let Some(step) = actions.set_pos_snap_step {
+            grab_pose_editor::set_pos_snap_step(self, step);
+        }
+        if let Some(step) = actions.set_rot_snap_step {
+            grab_pose_editor::set_rot_snap_step(self, step);
         }
         if actions.reset {
             grab_pose_editor::reset_active_point(self);
@@ -617,17 +665,28 @@ impl super::App {
         if actions.redo {
             grab_pose_editor::redo(self);
         }
+        let field_dragging = actions.field_edit.is_some()
+            || actions.finger_curl_edit.is_some()
+            || actions.set_pos_snap_step.is_some()
+            || actions.set_rot_snap_step.is_some();
         if let Some((field, value)) = actions.field_edit {
             grab_pose_editor::apply_field_edit(self, field, value);
         }
         if let Some((group_idx, value)) = actions.finger_curl_edit {
             grab_pose_editor::apply_finger_curl(self, group_idx, value);
         }
+        if !field_dragging {
+            // No field drag this frame — end coalescing so the next drag is its
+            // own undo entry.
+            if let Some(state) = self.grab_pose_editor.as_mut() {
+                state.end_coalesce();
+            }
+        }
         if let Some(i) = actions.select_point {
             grab_pose_editor::select_point(self, i);
         }
-        if actions.add_point {
-            grab_pose_editor::add_point(self);
+        if let Some(hand) = actions.add_point {
+            grab_pose_editor::add_point(self, hand);
         }
         if actions.delete_point {
             grab_pose_editor::delete_active_point(self);
@@ -637,6 +696,9 @@ impl super::App {
         }
         if let Some(kind) = actions.set_kind {
             grab_pose_editor::set_active_point_kind(self, kind);
+        }
+        if let Some(view) = actions.set_view {
+            grab_pose_editor::set_hand_view(self, view);
         }
     }
 
@@ -767,9 +829,31 @@ impl super::App {
     fn apply_anim_sim_actions(&mut self, actions: anim_sim_panel::AnimSimPanelActions) {
         use space_soup_engine::BINDING_BUTTONS;
 
-        if actions.close {
-            anim_sim_editor::close(self);
+        if actions.save {
+            anim_sim_editor::save(self);
+        }
+        if actions.request_exit {
+            anim_sim_editor::request_exit(self);
+        }
+        if actions.exit_discard {
+            anim_sim_editor::exit_discard(self);
             return;
+        }
+        if actions.exit_save {
+            anim_sim_editor::exit_save(self);
+            return;
+        }
+        if actions.cancel_exit {
+            anim_sim_editor::cancel_exit(self);
+        }
+        if actions.recenter {
+            anim_sim_editor::recenter_view(self);
+        }
+        if let Some(step) = actions.set_snap_step {
+            anim_sim_editor::set_snap_step(self, step);
+        }
+        if let Some(speed) = actions.set_speed {
+            anim_sim_editor::set_speed(self, speed);
         }
         if actions.undo {
             anim_sim_editor::undo(self);
@@ -836,6 +920,10 @@ impl super::App {
         }
         if let Some((field, value)) = actions.key_field_edit {
             anim_sim_editor::edit_key_field(self, field, value);
+        } else if let Some(state) = self.anim_sim_editor.as_mut() {
+            // No field drag this frame — end coalescing so the next drag is its
+            // own undo entry.
+            state.end_coalesce();
         }
         if let Some(ch) = actions.toggle_channel {
             anim_sim_editor::toggle_key_channel(self, ch);

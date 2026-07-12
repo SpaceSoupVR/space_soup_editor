@@ -21,6 +21,8 @@ pub(crate) fn in_rect(p: (f32, f32), r: Rect) -> bool {
 }
 
 pub(crate) struct Layout {
+    /// The whole window, for full-screen overlays like confirm dialogs.
+    pub window: Rect,
     pub toolbar: Rect,
     pub navigator: Rect,
     pub inspector: Rect,
@@ -101,6 +103,7 @@ impl Layout {
         );
 
         Self {
+            window: rect_from(0.0, 0.0, win_w, win_h),
             toolbar,
             navigator,
             inspector,
