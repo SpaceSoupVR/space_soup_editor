@@ -10,8 +10,8 @@ use super::super::layout::{in_rect, Layout};
 use super::super::picking::ray_plane_intersect;
 use super::super::render::scene::GIZMO_ANCHOR_MARGIN;
 use super::super::scene_bridge::{mesh_base_half_size, new_object, unique_id};
-use super::super::snap;
-use super::super::{App, EditorTool, GizmoPart, ViewMode};
+use super::super::snap::{self, snap_rotation, snap_vec3};
+use super::super::{App, EditorTool, GizmoPart, NewObjectSource, ViewMode, PRIMITIVE_PALETTE_COUNT};
 
 fn has_gizmo_target(app: &App) -> bool {
     match app.tool {
@@ -33,6 +33,10 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
     }
     if app.anim_sim_editor.is_some() {
         anim_sim_cursor_moved(app, dx, dy);
+        return;
+    }
+    if app.object_preview.is_some() {
+        preview_cursor_moved(app, new, dx, dy);
         return;
     }
 
@@ -100,7 +104,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
         }
     }
 
-    if app.dragging_new_model.is_some() {
+    if app.dragging_new_object.is_some() {
         let (o, d) = app.screen_ray(new.0, new.1, win_w, win_h);
         let in_center = over_viewport && new.1 < layout.model_tray(&theme)[1];
         app.ghost_preview = if in_center {
@@ -121,6 +125,8 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
     let gizmo_pos = app.xform_gizmo.get_position();
     let gizmo_rot = app.xform_gizmo.get_rotation();
     let gizmo_scale = app.xform_gizmo.get_scale();
+    let pos_snap = app.object_preview.as_ref().and_then(|s| s.pos_snap);
+    let rot_snap_deg = app.object_preview.as_ref().and_then(|s| s.rot_snap_deg);
 
     let mesh_path = app
         .runtime
@@ -149,10 +155,18 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
     match mode {
         GizmoMode::Translate => {
             let clearance = obj.cuboid.half_size.y + GIZMO_ANCHOR_MARGIN;
-            obj.cuboid.position = gizmo_pos - Vec3::new(0.0, clearance, 0.0);
+            let mut pos = gizmo_pos - Vec3::new(0.0, clearance, 0.0);
+            if let Some(step) = pos_snap {
+                pos = snap_vec3(pos, step);
+            }
+            obj.cuboid.position = pos;
         }
         GizmoMode::Rotate => {
-            obj.cuboid.rotation = gizmo_rot;
+            let mut rot = gizmo_rot;
+            if let Some(step) = rot_snap_deg {
+                rot = snap_rotation(rot, step);
+            }
+            obj.cuboid.rotation = rot;
         }
         GizmoMode::Scale => {
             let new_half = Vec3::new(
@@ -250,6 +264,77 @@ fn grab_pose_left_button(app: &mut App, state: ElementState) {
     app.redraw_now();
 }
 
+fn preview_cursor_moved(app: &mut App, new: (f32, f32), dx: f32, dy: f32) {
+    let mouse_vec2 = Vec2::new(new.0, new.1);
+    let viewport = app.win_size();
+
+    if !app.gizmo_dragging {
+        app.xform_gizmo.hovered_axis = if !app.press_in_chrome {
+            app.xform_gizmo.raycast_gizmo(mouse_vec2, &app.camera, viewport)
+        } else {
+            None
+        };
+    }
+
+    if app.left_down {
+        if app.gizmo_dragging {
+            app.xform_gizmo.drag(mouse_vec2, &app.camera, viewport);
+            apply_gizmo_drag_to_selected_object(app);
+            app.dragged = true;
+        } else if !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
+            app.dragged = true;
+            if let Some(state) = app.object_preview.as_mut() {
+                state.orbit.orbit(dx, dy);
+            }
+        }
+    }
+
+    app.redraw_now();
+}
+
+fn preview_left_button(app: &mut App, state: ElementState) {
+    let (win_w, win_h) = app.win_size();
+    let mp = app.mouse_pos;
+    let theme = Theme::new(app.scale);
+    let layout = Layout::new(win_w, win_h, &theme);
+
+    match state {
+        ElementState::Pressed => {
+            app.left_down = true;
+            app.dragged = false;
+            app.gizmo_drag = None;
+            app.gizmo_dragging = false;
+            app.mouse_pressed.push(AMouseButton::Left);
+            app.mouse_held.push(AMouseButton::Left);
+
+            app.press_in_chrome = !in_rect(mp, layout.grab_pose_viewport())
+                || in_rect(mp, layout.inspector)
+                || in_rect(mp, layout.editor_tab);
+
+            if !app.press_in_chrome && has_gizmo_target(app) {
+                let mp2 = Vec2::new(mp.0, mp.1);
+                if let Some(axis) = app.xform_gizmo.raycast_gizmo(mp2, &app.camera, (win_w, win_h))
+                {
+                    app.xform_gizmo
+                        .begin_drag(axis, mp2, &app.camera, (win_w, win_h));
+                    app.gizmo_dragging = true;
+                    app.dragged = true;
+                }
+            }
+        }
+        ElementState::Released => {
+            app.left_down = false;
+            if app.gizmo_dragging {
+                app.xform_gizmo.end_drag();
+                app.gizmo_dragging = false;
+            }
+            app.mouse_released.push(AMouseButton::Left);
+            app.dragged = false;
+        }
+    }
+    app.redraw_now();
+}
+
 pub(crate) fn left_button(app: &mut App, state: ElementState) {
     if app.grab_pose_editor.is_some() {
         grab_pose_left_button(app, state);
@@ -257,6 +342,10 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
     }
     if app.anim_sim_editor.is_some() {
         anim_sim_left_button(app, state);
+        return;
+    }
+    if app.object_preview.is_some() {
+        preview_left_button(app, state);
         return;
     }
 
@@ -284,19 +373,25 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                 let mp2 = Vec2::new(mp.0, mp.1);
 
                 let model_list_area = layout.model_list_area(&theme);
-                let model_rects =
-                    layout.model_rects(&theme, app.available_models.len(), app.model_scroll_y);
-                let clicked_chip = model_rects
+                let total_chips = PRIMITIVE_PALETTE_COUNT + app.available_models.len();
+                let chip_rects = layout.model_rects(&theme, total_chips, app.model_scroll_y);
+                let clicked_chip = chip_rects
                     .iter()
                     .position(|r| in_rect(mp, *r) && in_rect(mp, model_list_area));
 
                 if let Some(i) = clicked_chip {
-                    app.dragging_new_model = Some(app.available_models[i].clone());
+                    app.dragging_new_object = Some(if i == 0 {
+                        NewObjectSource::Light
+                    } else if i == 1 {
+                        NewObjectSource::Sound
+                    } else {
+                        NewObjectSource::Model(app.available_models[i - PRIMITIVE_PALETTE_COUNT].clone())
+                    });
                     app.dragged = true;
-                } else if app.dragging_new_model.is_some() && !app.press_in_chrome {
-                    if let Some(path) = app.dragging_new_model.take() {
+                } else if app.dragging_new_object.is_some() && !app.press_in_chrome {
+                    if let Some(source) = app.dragging_new_object.take() {
                         if let Some(pos) = app.ghost_preview.take() {
-                            place_dropped_model(app, &path, pos);
+                            place_dropped_object(app, source, pos);
                         } else {
                             app.ghost_preview = None;
                         }
@@ -447,6 +542,14 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
     app.redraw_now();
 }
 
+fn place_dropped_object(app: &mut App, source: NewObjectSource, pos: Vec3) {
+    match source {
+        NewObjectSource::Model(model_path) => place_dropped_model(app, &model_path, pos),
+        NewObjectSource::Light => place_dropped_light(app, pos),
+        NewObjectSource::Sound => place_dropped_sound(app, pos),
+    }
+}
+
 fn place_dropped_model(app: &mut App, model_path: &std::path::Path, pos: Vec3) {
     let game_dir = app.runtime.game_dir().to_path_buf();
     let rel = model_path.strip_prefix(&game_dir).unwrap_or(model_path);
@@ -466,6 +569,40 @@ fn place_dropped_model(app: &mut App, model_path: &std::path::Path, pos: Vec3) {
         half,
         Some(rel_str),
     );
+    scene.objects.push(obj);
+    app.selected_object = Some(id);
+    app.scene_dirty = true;
+}
+
+fn place_dropped_light(app: &mut App, pos: Vec3) {
+    let scene = app.runtime.scene_mut();
+    let id = unique_id(scene, "light");
+    let half = Vec3::splat(0.1);
+    let mut obj = new_object(id.clone(), Vec3::new(pos.x, half.y + 0.5, pos.z), half, None);
+    obj.hidden = true;
+    obj.light = Some(space_soup_engine::LightDef::default());
+    scene.objects.push(obj);
+    app.selected_object = Some(id);
+    app.scene_dirty = true;
+}
+
+fn place_dropped_sound(app: &mut App, pos: Vec3) {
+    let scene = app.runtime.scene_mut();
+    let id = unique_id(scene, "sound");
+    let half = Vec3::splat(0.1);
+    let mut obj = new_object(id.clone(), Vec3::new(pos.x, half.y + 0.5, pos.z), half, None);
+    obj.hidden = true;
+    obj.sound = Some(space_soup_engine::SoundSourceDef {
+        clip: "sound/activate.mp3".to_string(),
+        volume: 1.0,
+        pitch: 1.0,
+        min_distance: 1.0,
+        max_distance: 10.0,
+        looping: false,
+        autoplay: false,
+        directional: false,
+        cone_angle_deg: 45.0,
+    });
     scene.objects.push(obj);
     app.selected_object = Some(id);
     app.scene_dirty = true;

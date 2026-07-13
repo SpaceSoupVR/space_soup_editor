@@ -4,9 +4,9 @@ use agate::theme as t;
 use agate::{Theme, Ui, WidgetId};
 
 use space_soup::ui2d::Color;
-use space_soup_engine::Scene;
+use space_soup_engine::{LightKind, Scene, SoundSourceDef};
 
-use super::super::layout::{Layout, PAD, ROW_H};
+use super::super::layout::{InspectorCards, Layout, PAD, ROW_H};
 use super::super::EditTarget;
 use super::split_row;
 
@@ -26,6 +26,8 @@ pub(crate) fn draw(
     open_script_editor: &mut Option<String>,
     open_grab_pose_editor: &mut Option<String>,
     open_anim_sim_editor: &mut Option<String>,
+    open_object_preview: &mut Option<String>,
+    preview_sound: &mut Option<(String, f32, f32)>,
     content_height: &mut f32,
     editable: bool,
     rot_edit: &mut Option<(String, [f32; 3])>,
@@ -87,6 +89,8 @@ pub(crate) fn draw(
                 open_anim_sim_editor,
                 editable,
                 rot_edit,
+                open_object_preview,
+                preview_sound,
             );
             let ch = (bottom_y + scroll_y) - iy + theme.px(12.0);
             ui.end_scroll_area(scroll_id, layout.inspector, ch);
@@ -188,8 +192,14 @@ fn draw_object_cards(
     open_anim_sim_editor: &mut Option<String>,
     editable: bool,
     rot_edit: &mut Option<(String, [f32; 3])>,
+    open_object_preview: &mut Option<String>,
+    preview_sound: &mut Option<(String, f32, f32)>,
 ) -> f32 {
-    let cards = layout.inspector_cards(theme, body_top);
+    let (has_light, has_sound) = {
+        let obj = scene.find_object(id).unwrap();
+        (obj.light.is_some(), obj.sound.is_some())
+    };
+    let cards = layout.inspector_cards(theme, body_top, has_light, has_sound);
 
     let (obj_position, obj_half_size, obj_rotation, obj_color, has_script, has_mesh) = {
         let obj = scene.find_object(id).unwrap();
@@ -268,54 +278,60 @@ fn draw_object_cards(
         }
     }
 
-    ui.separator(cards.sz_card[0], cards.sz_card[1], cards.sz_card[2]);
-    ui.fill(
-        [cards.sz_card[0], cards.sz_card[1], cards.sz_card[2], hdr_h],
-        t::SURFACE,
-    );
-    ui.label_styled(
-        cards.sz_card[0] + theme.px(PAD),
-        cards.sz_card[1] + theme.px(5.0),
-        "SIZE",
-        theme.small(),
-        t::TEXT_SECONDARY,
-        cards.sz_card[2],
-        None,
-    );
-    let sz_vals = [
-        obj_half_size.x * 2.0,
-        obj_half_size.y * 2.0,
-        obj_half_size.z * 2.0,
-    ];
-    for i in 0..3usize {
-        let (label_r, input_r) = split_row(cards.sz_rows[i], label_w, field_gap);
+    if !has_light && !has_sound {
+        ui.separator(cards.sz_card[0], cards.sz_card[1], cards.sz_card[2]);
+        ui.fill(
+            [cards.sz_card[0], cards.sz_card[1], cards.sz_card[2], hdr_h],
+            t::SURFACE,
+        );
         ui.label_styled(
-            label_r[0],
-            label_r[1] + (label_r[3] - theme.body()) * 0.5,
-            axes[i],
-            theme.body(),
+            cards.sz_card[0] + theme.px(PAD),
+            cards.sz_card[1] + theme.px(5.0),
+            "SIZE",
+            theme.small(),
             t::TEXT_SECONDARY,
-            label_r[2],
+            cards.sz_card[2],
             None,
         );
-        if editable {
-            let wid = WidgetId::of(&format!("sz_{i}_{id}"));
-            if let Some(v) =
-                ui.drag_float_clipped(wid, input_r, sz_vals[i], 0.005, "", Some(clip_ins))
-            {
-                if let Some(obj) = scene.find_object_mut(id) {
-                    let half = (v * 0.5).max(0.005);
-                    match i {
-                        0 => obj.cuboid.half_size.x = half,
-                        1 => obj.cuboid.half_size.y = half,
-                        _ => obj.cuboid.half_size.z = half,
+        let sz_vals = [
+            obj_half_size.x * 2.0,
+            obj_half_size.y * 2.0,
+            obj_half_size.z * 2.0,
+        ];
+        for i in 0..3usize {
+            let (label_r, input_r) = split_row(cards.sz_rows[i], label_w, field_gap);
+            ui.label_styled(
+                label_r[0],
+                label_r[1] + (label_r[3] - theme.body()) * 0.5,
+                axes[i],
+                theme.body(),
+                t::TEXT_SECONDARY,
+                label_r[2],
+                None,
+            );
+            if editable {
+                let wid = WidgetId::of(&format!("sz_{i}_{id}"));
+                if let Some(v) =
+                    ui.drag_float_clipped(wid, input_r, sz_vals[i], 0.005, "", Some(clip_ins))
+                {
+                    if let Some(obj) = scene.find_object_mut(id) {
+                        let half = (v * 0.5).max(0.005);
+                        match i {
+                            0 => obj.cuboid.half_size.x = half,
+                            1 => obj.cuboid.half_size.y = half,
+                            _ => obj.cuboid.half_size.z = half,
+                        }
+                        *scene_dirty = true;
                     }
-                    *scene_dirty = true;
                 }
+            } else {
+                draw_readonly_value(ui, theme, input_r, &format!("{:.3}", sz_vals[i]), clip_ins);
             }
-        } else {
-            draw_readonly_value(ui, theme, input_r, &format!("{:.3}", sz_vals[i]), clip_ins);
         }
+    } else if has_light {
+        draw_light_card(ui, theme, &cards, id, scene, scene_dirty);
+    } else if has_sound {
+        draw_sound_card(ui, theme, &cards, id, scene, scene_dirty);
     }
 
     ui.separator(cards.rot_card[0], cards.rot_card[1], cards.rot_card[2]);
@@ -385,29 +401,13 @@ fn draw_object_cards(
         *rot_edit = None;
     }
 
-    ui.separator(cards.col_card[0], cards.col_card[1], cards.col_card[2]);
-    ui.fill(
-        [
-            cards.col_card[0],
-            cards.col_card[1],
-            cards.col_card[2],
-            hdr_h,
-        ],
-        t::SURFACE,
-    );
-    ui.label_styled(
-        cards.col_card[0] + theme.px(PAD),
-        cards.col_card[1] + theme.px(5.0),
-        "COLOR",
-        theme.small(),
-        t::TEXT_SECONDARY,
-        cards.col_card[2],
-        None,
-    );
-    ui.color_swatch(
-        cards.col_row,
-        Color(obj_color.0, obj_color.1, obj_color.2, 255),
-    );
+    if !has_light && !has_sound {
+        draw_card_header(ui, theme, cards.col_card, hdr_h, "COLOR");
+        ui.color_swatch(
+            cards.col_row,
+            Color(obj_color.0, obj_color.1, obj_color.2, 255),
+        );
+    }
 
     if has_mesh && ui.button_secondary(cards.btn_voxelize, "Voxelize") {
         match super::super::scene_bridge::voxelize_object(scene, game_dir, id) {
@@ -416,6 +416,10 @@ fn draw_object_cards(
                 *scene_dirty = true;
             }
             Err(e) => log::warn!("space_soup_editor: voxelize '{id}' failed: {e}"),
+        }
+    } else if has_sound && ui.button_secondary(cards.btn_voxelize, "Play Preview") {
+        if let Some(sound) = scene.find_object(id).and_then(|o| o.sound.clone()) {
+            *preview_sound = Some((sound.clip, sound.volume, sound.pitch));
         }
     }
 
@@ -440,6 +444,10 @@ fn draw_object_cards(
 
     if ui.button_secondary(cards.btn_anim_sim, "Simulate Animations") {
         *open_anim_sim_editor = Some(id.to_string());
+    }
+
+    if ui.button_secondary(cards.btn_preview, "Preview") {
+        *open_object_preview = Some(id.to_string());
     }
 
     if ui.button_secondary(cards.btn_dup, "Duplicate") {
@@ -489,6 +497,245 @@ fn draw_readonly_value(ui: &mut Ui, theme: &Theme, r: [f32; 4], text: &str, clip
         r[2] - theme.px(16.0),
         Some(clip),
     );
+}
+
+fn draw_card_header(ui: &mut Ui, theme: &Theme, card: [f32; 4], hdr_h: f32, title: &str) {
+    ui.separator(card[0], card[1], card[2]);
+    ui.fill([card[0], card[1], card[2], hdr_h], t::SURFACE);
+    ui.label_styled(
+        card[0] + theme.px(PAD),
+        card[1] + theme.px(5.0),
+        title,
+        theme.small(),
+        t::TEXT_SECONDARY,
+        card[2],
+        None,
+    );
+}
+
+/// A labeled text-input row, parsed as `f32` on edit. Returns the parsed
+/// value when the user commits a valid edit this frame.
+fn text_field_row(
+    ui: &mut Ui,
+    theme: &Theme,
+    row: [f32; 4],
+    label: &str,
+    label_w: f32,
+    id: &str,
+    value: f32,
+    decimals: usize,
+) -> Option<f32> {
+    let (label_r, input_r) = split_row(row, label_w, theme.px(6.0));
+    ui.label_styled(
+        label_r[0],
+        label_r[1] + (label_r[3] - theme.body()) * 0.5,
+        label,
+        theme.body(),
+        t::TEXT_SECONDARY,
+        label_r[2],
+        None,
+    );
+    let wid = WidgetId::of(&format!("{id}_{}", label));
+    let val_str = format!("{value:.decimals$}");
+    ui.text_input(wid, input_r, &val_str, "")
+        .and_then(|s| s.trim().parse::<f32>().ok())
+}
+
+fn draw_light_card(
+    ui: &mut Ui,
+    theme: &Theme,
+    cards: &InspectorCards,
+    id: &str,
+    scene: &mut Scene,
+    scene_dirty: &mut bool,
+) {
+    draw_card_header(ui, theme, cards.light_card, theme.px(22.0), "LIGHT");
+
+    let light = scene
+        .find_object(id)
+        .and_then(|o| o.light.clone())
+        .unwrap_or_default();
+
+    let label_w = theme.px(56.0);
+
+    let kind_idx = matches!(light.kind, LightKind::Spot) as usize;
+    if let Some(new_idx) = ui.tabs(cards.light_rows[0], kind_idx, &["Point", "Spot"]) {
+        if let Some(obj) = scene.find_object_mut(id) {
+            if let Some(l) = obj.light.as_mut() {
+                l.kind = if new_idx == 1 {
+                    LightKind::Spot
+                } else {
+                    LightKind::Point
+                };
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.light_rows[1], "Intens.", label_w, id, light.intensity, 2,
+    ) {
+        if v >= 0.0 {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+                l.intensity = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.light_rows[2], "Range", label_w, id, light.range, 2,
+    ) {
+        if v > 0.0 {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+                l.range = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.light_rows[3], "Cone\u{b0}", label_w, id, light.cone_angle_deg, 1,
+    ) {
+        if v > 0.0 && v <= 180.0 {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+                l.cone_angle_deg = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    ui.color_swatch(
+        cards.light_rows[4],
+        Color(light.color.0, light.color.1, light.color.2, 255),
+    );
+}
+
+fn draw_sound_card(
+    ui: &mut Ui,
+    theme: &Theme,
+    cards: &InspectorCards,
+    id: &str,
+    scene: &mut Scene,
+    scene_dirty: &mut bool,
+) {
+    draw_card_header(ui, theme, cards.sound_card, theme.px(22.0), "SOUND");
+
+    let sound = scene
+        .find_object(id)
+        .and_then(|o| o.sound.clone())
+        .unwrap_or(SoundSourceDef {
+            clip: String::new(),
+            volume: 1.0,
+            pitch: 1.0,
+            min_distance: 1.0,
+            max_distance: 10.0,
+            looping: false,
+            autoplay: false,
+            directional: false,
+            cone_angle_deg: 45.0,
+        });
+
+    let label_w = theme.px(56.0);
+
+    let (label_r, input_r) = split_row(cards.sound_rows[0], label_w, theme.px(6.0));
+    ui.label_styled(
+        label_r[0],
+        label_r[1] + (label_r[3] - theme.body()) * 0.5,
+        "Clip",
+        theme.body(),
+        t::TEXT_SECONDARY,
+        label_r[2],
+        None,
+    );
+    let clip_wid = WidgetId::of(&format!("sound_clip_{id}"));
+    if let Some(new_str) = ui.text_input(clip_wid, input_r, &sound.clip, "sound/activate.mp3") {
+        if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+            s.clip = new_str.trim().to_string();
+            *scene_dirty = true;
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.sound_rows[1], "Volume", label_w, id, sound.volume, 2,
+    ) {
+        if v >= 0.0 {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                s.volume = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.sound_rows[2], "Pitch", label_w, id, sound.pitch, 2,
+    ) {
+        if v > 0.0 {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                s.pitch = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.sound_rows[3], "Min D.", label_w, id, sound.min_distance, 2,
+    ) {
+        if v >= 0.0 {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                s.min_distance = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.sound_rows[4], "Max D.", label_w, id, sound.max_distance, 2,
+    ) {
+        if v > sound.min_distance {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                s.max_distance = v;
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    let toggle_row = cards.sound_rows[5];
+    let tw = (toggle_row[2] - theme.px(8.0) * 2.0) / 3.0;
+    let toggles = [
+        ("Loop", sound.looping),
+        ("Auto", sound.autoplay),
+        ("Dir.", sound.directional),
+    ];
+    for (i, (label, value)) in toggles.iter().enumerate() {
+        let r = [
+            toggle_row[0] + i as f32 * (tw + theme.px(8.0)),
+            toggle_row[1],
+            tw,
+            toggle_row[3],
+        ];
+        if let Some(new_val) = ui.checkbox(r, *value, label) {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                match i {
+                    0 => s.looping = new_val,
+                    1 => s.autoplay = new_val,
+                    _ => s.directional = new_val,
+                }
+                *scene_dirty = true;
+            }
+        }
+    }
+
+    if let Some(v) = text_field_row(
+        ui, theme, cards.sound_rows[6], "Cone\u{b0}", label_w, id, sound.cone_angle_deg, 1,
+    ) {
+        if v > 0.0 && v <= 180.0 {
+            if let Some(s) = scene.find_object_mut(id).and_then(|o| o.sound.as_mut()) {
+                s.cone_angle_deg = v;
+                *scene_dirty = true;
+            }
+        }
+    }
 }
 
 fn default_script_stub(id: &str) -> String {

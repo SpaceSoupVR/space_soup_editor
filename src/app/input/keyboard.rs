@@ -4,8 +4,10 @@ use winit::keyboard::{Key, NamedKey};
 use super::super::anim_sim_editor;
 use super::super::discover::winit_key_to_agate;
 use super::super::grab_pose_editor;
+use super::super::object_preview;
 use super::super::snap;
 use super::super::{App, EditorTool, ViewMode};
+use crate::transform_gizmo::GizmoMode;
 
 /// Entry point for every key press *and release*. In the base-editor viewport
 /// WASDQE (+ Space/Ctrl) fly the camera: those keys update the held-key state
@@ -79,6 +81,10 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
         anim_sim_key(app, event);
         return;
     }
+    if app.object_preview.is_some() {
+        preview_key(app, event);
+        return;
+    }
 
     if app.editing.is_some() && app.editor_focused {
         editor_key(app, event);
@@ -114,6 +120,40 @@ pub(crate) fn handle_key(app: &mut App, event: &KeyEvent) {
     if let Some(nk) = winit_key_to_agate(&event.logical_key) {
         app.named_keys.push(nk);
     }
+}
+
+fn preview_key(app: &mut App, ev: &KeyEvent) {
+    if let Key::Named(NamedKey::Escape) = &ev.logical_key {
+        object_preview::close(app);
+        app.redraw_now();
+        return;
+    }
+
+    // Mirrors handle_key's text/hotkey/named-key forwarding (minus the
+    // rigging-only "g" case) so the reused Inspector's text-input fields
+    // still work while previewing.
+    let cmd = app.mods.super_key() || app.mods.control_key();
+    if !cmd {
+        if let Some(txt) = &ev.text {
+            for ch in txt.chars() {
+                if !ch.is_control() {
+                    app.text_input.push(ch);
+                }
+            }
+        }
+        if let Key::Character(s) = &ev.logical_key {
+            match s.as_str() {
+                "w" | "W" => app.xform_gizmo.mode = GizmoMode::Translate,
+                "e" | "E" => app.xform_gizmo.mode = GizmoMode::Rotate,
+                "r" | "R" => app.xform_gizmo.mode = GizmoMode::Scale,
+                _ => {}
+            }
+        }
+    }
+    if let Some(nk) = winit_key_to_agate(&ev.logical_key) {
+        app.named_keys.push(nk);
+    }
+    app.redraw_now();
 }
 
 fn grab_pose_key(app: &mut App, ev: &KeyEvent) {

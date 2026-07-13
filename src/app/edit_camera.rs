@@ -57,13 +57,21 @@ impl EditCamera {
 
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let right = self.right();
-        let speed = 0.004;
+        let speed = 0.012 * self.speed_scale();
 
         self.position += right * dx * speed - Vec3::Y * dy * speed;
     }
 
     pub fn dolly(&mut self, d: f32) {
-        self.position += self.forward() * d;
+        self.position += self.forward() * d * self.speed_scale();
+    }
+
+    // Flat pan/dolly speed feels fine near the origin but increasingly
+    // sluggish the further the camera flies out, since a fixed
+    // units-per-pixel rate never keeps pace with how far away the scene
+    // looks — mirrors OrbitCamera's distance-proportional pan speed.
+    fn speed_scale(&self) -> f32 {
+        self.position.length().max(1.0)
     }
 
     /// Advance the camera from held fly keys. `forward`/`back` follow the view
