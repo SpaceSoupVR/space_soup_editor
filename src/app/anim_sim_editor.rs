@@ -320,6 +320,7 @@ pub(crate) fn open(app: &mut App, object_id: String) {
 
 fn close(app: &mut App) {
     app.anim_sim_editor = None;
+    super::scene_bridge::save_if_dirty(app);
 }
 
 /// Commit the current animations/bindings as the saved state (kept when exiting).

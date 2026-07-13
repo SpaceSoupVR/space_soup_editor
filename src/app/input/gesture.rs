@@ -23,6 +23,13 @@ pub(crate) fn pinch(app: &mut App, delta: f64, phase: TouchPhase) {
             }
             app.redraw_now();
         }
+    } else if app.object_preview.is_some() {
+        if over_grab_pose_viewport(app) {
+            if let Some(state) = app.object_preview.as_mut() {
+                state.orbit.zoom(delta as f32 * -0.8);
+            }
+            app.redraw_now();
+        }
     } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_viewport(app) {
         app.edit_camera.dolly(delta as f32 * 0.8);
         app.redraw_now();
@@ -59,6 +66,17 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
                 }
             }
         }
+    } else if app.object_preview.is_some() {
+        if over_grab_pose_viewport(app) {
+            let cmd = app.mods.super_key() || app.mods.control_key();
+            if let Some(state) = app.object_preview.as_mut() {
+                if cmd {
+                    state.orbit.zoom(-dy * 0.002);
+                } else {
+                    state.orbit.pan(dx, dy);
+                }
+            }
+        }
     } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_model_tray(app) {
         let (win_w, win_h) = app.win_size();
         let theme = Theme::new(app.scale);
@@ -67,7 +85,7 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
         app.model_scroll_y = (app.model_scroll_y + dy).clamp(0.0, max_scroll);
     } else if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
         if app.mods.super_key() || app.mods.control_key() {
-            app.edit_camera.dolly(-dy * 0.002);
+            app.edit_camera.dolly(-dy * 0.006);
         } else {
             app.edit_camera.pan(dx, dy);
         }

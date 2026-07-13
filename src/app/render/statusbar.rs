@@ -1,5 +1,5 @@
 use agate::theme as t;
-use agate::{Theme, Ui};
+use agate::{Region, Theme, Ui};
 
 use super::super::layout::{Layout, PAD};
 use agate::TextEditor;
@@ -19,6 +19,15 @@ pub(crate) fn draw(
     let sb = layout.statusbar;
     let sy = sb[1] + (sb[3] - theme.small()) * 0.5;
 
+    let fps_text = format!("{fps:.1} fps \u{b7} frame {frame_count}");
+    let fps_w = fps_text.len() as f32 * theme.small() * 0.62 + theme.px(PAD);
+
+    // Left/mid/right zones are a true 3-way split of one row, so the middle
+    // (Ln/Col) zone can never overlap the left or fps zones regardless of
+    // text length or window width.
+    let (left_r, rest) = Region::new(sb).split_left(sb[2] * 0.5);
+    let (fps_r, mid_r) = rest.split_right(fps_w);
+
     let left = if show_editor {
         editor
             .path
@@ -31,18 +40,18 @@ pub(crate) fn draw(
             None => format!("Scene: {scene_name}"),
         }
     };
-    let left_w = sb[2] * 0.5;
     ui.label_styled(
-        sb[0] + theme.px(PAD),
+        left_r[0] + theme.px(PAD),
         sy,
         &left,
         theme.small(),
         t::TEXT_SECONDARY,
-        left_w,
-        Some([sb[0], sb[1], left_w, sb[3]]),
+        left_r[2] - theme.px(PAD),
+        Some(left_r),
     );
 
     if show_editor {
+        let mid_r = mid_r.rect();
         let (ln, col) = editor.cursor_line_col();
         let mid = format!(
             "Ln {ln}, Col {col}{}",
@@ -52,29 +61,25 @@ pub(crate) fn draw(
                 ""
             }
         );
-        let mid_w = sb[2] * 0.4;
-        let mid_x = sb[0] + (sb[2] - mid.len() as f32 * theme.small() * 0.6) * 0.5;
+        let mid_x = mid_r[0] + (mid_r[2] - mid.len() as f32 * theme.small() * 0.6) * 0.5;
         ui.label_styled(
-            mid_x,
+            mid_x.max(mid_r[0]),
             sy,
             &mid,
             theme.small(),
             t::TEXT_SECONDARY,
-            mid_w,
-            Some([sb[0] + sb[2] * 0.3, sb[1], mid_w, sb[3]]),
+            mid_r[2],
+            Some(mid_r),
         );
     }
 
-    let fps_text = format!("{fps:.1} fps \u{b7} frame {frame_count}");
-    let fps_w = fps_text.len() as f32 * theme.small() * 0.62;
-    let fps_x = sb[0] + sb[2] - fps_w - theme.px(PAD);
     ui.label_styled(
-        fps_x,
+        fps_r[0],
         sy,
         &fps_text,
         theme.small(),
         t::TEXT_SECONDARY,
-        fps_w + theme.px(PAD),
-        Some([fps_x, sb[1], fps_w + theme.px(PAD), sb[3]]),
+        fps_r[2],
+        Some(fps_r),
     );
 }
