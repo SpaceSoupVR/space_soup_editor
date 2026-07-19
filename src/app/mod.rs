@@ -63,8 +63,6 @@ pub(crate) enum EditTarget {
     ObjectScript(String),
 }
 
-/// What's being dragged out of the viewport palette — a file-backed model, or
-/// one of the two fixed non-visual primitives (light / sound source).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum NewObjectSource {
     Model(PathBuf),
@@ -72,8 +70,6 @@ pub(crate) enum NewObjectSource {
     Sound,
 }
 
-/// The two fixed non-file-backed palette entries ("Light", "Sound"), always
-/// shown first in the model tray, ahead of the file-backed model chips.
 pub(crate) const PRIMITIVE_PALETTE_COUNT: usize = 2;
 
 pub(crate) struct App {
@@ -126,7 +122,7 @@ pub(crate) struct App {
     pub(crate) last_mouse_pos: (f32, f32),
     pub(crate) left_down: bool,
     pub(crate) dragged: bool,
-    /// Which WASDQE fly keys are held (base-editor free-look movement).
+
     pub(crate) fly: edit_camera::FlyInput,
 
     pub(crate) scene_dirty: bool,
@@ -143,8 +139,6 @@ pub(crate) struct App {
     pub(crate) nav_scenes_open: bool,
     pub(crate) nav_objects_open: bool,
 
-    /// Measured height of the inspector's object cards; drives its scrollbar
-    /// so short windows can still reach the bottom buttons.
     pub(crate) inspector_content_height: f32,
 
     pub(crate) files_discovered: Vec<PathBuf>,
@@ -159,15 +153,10 @@ pub(crate) struct App {
     pub(crate) grab_pose_editor: Option<grab_pose_editor::GrabPoseEditorState>,
 
     pub(crate) anim_sim_editor: Option<anim_sim_editor::AnimSimEditorState>,
-    /// Cross-object clipboards so animations/keyframes survive closing and
-    /// reopening the anim-sim editor on another object.
+
     pub(crate) anim_clipboard: Option<space_soup_engine::Animation>,
     pub(crate) keyframe_clipboard: Option<space_soup_engine::Keyframe>,
 
-    /// Sticky euler for the inspector rotation drag in progress:
-    /// `(object_id, [x, y, z] degrees)`. Cleared on any frame without a
-    /// rotation drag; while dragging it keeps the three axes independent
-    /// instead of re-decomposing the quat (gimbal lock collapses Y/Z).
     pub(crate) inspector_rot_edit: Option<(String, [f32; 3])>,
 
     pub(crate) object_preview: Option<object_preview::ObjectPreviewState>,

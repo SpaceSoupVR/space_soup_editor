@@ -24,9 +24,6 @@ pub(crate) struct SnapJoint {
     pub current_pos: Vec3,
 }
 
-/// The joint-local pose used for both the finger marker dots and the actual skinned mesh, so
-/// they stay visually in sync: each bone's curl comes from `finger_curl`, defaulting to
-/// half-curled for any bone not explicitly authored yet.
 fn current_local_pose(skin: &GltfSkin, finger_curl: &HashMap<String, f32>) -> Vec<(Vec3, Quat, Vec3)> {
     skin.blended_local_pose(0, 1, |ji| {
         let name = GltfSkin::generic_joint_name(&skin.joint_names[ji]);
@@ -34,10 +31,6 @@ fn current_local_pose(skin: &GltfSkin, finger_curl: &HashMap<String, f32>) -> Ve
     })
 }
 
-/// Per-joint skinning matrices (root * joint-in-mesh-space * inverse-bind) ready to upload via
-/// `GltfSkin::update_joint_matrices` — without this, a skinned mesh renders with whatever pose
-/// happened to be left in its joint buffer (effectively degenerate), which is why the hand model
-/// wasn't visibly showing up next to the finger marker dots.
 pub(crate) fn compute_skin_matrices(
     skin: &GltfSkin,
     root: Mat4,

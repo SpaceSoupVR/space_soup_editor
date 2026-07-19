@@ -14,7 +14,6 @@ pub(crate) const PANEL_GAP: f32 = 12.0;
 pub(crate) const WINDOW_MARGIN: f32 = 16.0;
 
 pub(crate) struct Layout {
-    /// The whole window, for full-screen overlays like confirm dialogs.
     pub window: Rect,
     pub toolbar: Rect,
     pub navigator: Rect,
@@ -71,11 +70,7 @@ impl Layout {
         let btn_editor = right_flow.take(bw);
         let btn_save_scene = right_flow.take(theme.px(110.0));
 
-        // seg_pill (left-anchored) and the save/editor/save-scene buttons
-        // (right-anchored) are two independent `Flow`s over one toolbar —
-        // not a single split chain — so an undersized toolbar can't be
-        // ruled out structurally; catch it explicitly instead of letting
-        // the buttons silently draw on top of each other.
+
         let mut guard = agate::OverlapGuard::new();
         guard.claim("toolbar.seg_pill", seg_pill);
         guard.claim("toolbar.btn_save_scene", btn_save_scene);
@@ -221,6 +216,7 @@ impl Layout {
         top_y: f32,
         has_light: bool,
         has_sound: bool,
+        has_mesh: bool,
     ) -> InspectorCards {
         let ix = self.inspector[0];
         let iw = self.inspector[2];
@@ -248,10 +244,9 @@ impl Layout {
         let pos_card = guard.claim("inspector.pos_card", col_flow.take(pos_rh));
         let pos_rows: [Rect; 3] = std::array::from_fn(|i| rows_at(pos_card[1], 3, cx, cw)[i]);
 
-        // SIZE / LIGHT / SOUND share this slot — exactly one is drawn per
-        // object, depending on what it has attached.
-        let light_h = card_h(5.0); // kind, intensity, range, cone, color swatch
-        let sound_h = card_h(7.0); // clip, volume, pitch, min/max dist, toggles, cone
+
+        let light_h = card_h(5.0);
+        let sound_h = card_h(7.0);
         let active_idx = if has_light {
             1
         } else if has_sound {
@@ -272,16 +267,14 @@ impl Layout {
         let rot_card = guard.claim("inspector.rot_card", col_flow.take(pos_rh));
         let rot_rows: [Rect; 3] = std::array::from_fn(|i| rows_at(rot_card[1], 3, cx, cw)[i]);
 
-        // Cuboid color is meaningless for light/sound markers (they draw no
-        // solid body) — the light card has its own color swatch instead.
-        let has_col_card = !has_light && !has_sound;
-        let col_h = hh + rp * 1.5 + fh;
-        let col_card = if has_col_card {
-            guard.claim("inspector.col_card", col_flow.take(col_h))
+
+        let mesh_rh = card_h(3.0);
+        let mesh_card = if has_mesh {
+            guard.claim("inspector.mesh_card", col_flow.take(mesh_rh))
         } else {
-            rect_from(cx, rot_card[1] + pos_rh + cg, cw, col_h)
+            rect_from(cx, rot_card[1] + pos_rh + cg, cw, mesh_rh)
         };
-        let col_row = rect_from(cx + rp, col_card[1] + hh + rp, cw - rp * 2.0, fh);
+        let mesh_rows: [Rect; 3] = std::array::from_fn(|i| rows_at(mesh_card[1], 3, cx, cw)[i]);
 
         let btn_h = theme.px(30.0);
         let btn_voxelize = guard.claim("inspector.btn_voxelize", col_flow.take(btn_h));
@@ -304,12 +297,12 @@ impl Layout {
             sz_rows,
             rot_card,
             rot_rows,
-            col_card,
-            col_row,
             light_card,
             light_rows,
             sound_card,
             sound_rows,
+            mesh_card,
+            mesh_rows,
             btn_voxelize,
             btn_script,
             btn_grab_pose,
@@ -321,8 +314,7 @@ impl Layout {
         }
     }
 
-    /// The anim-sim editor reuses the same full-width 3D viewport as the
-    /// grab pose editor (navigator through center, inspector stays a panel).
+
     pub fn anim_sim_viewport(&self) -> Rect {
         self.grab_pose_viewport()
     }
@@ -336,12 +328,12 @@ pub(crate) struct InspectorCards {
     pub sz_rows: [Rect; 3],
     pub rot_card: Rect,
     pub rot_rows: [Rect; 3],
-    pub col_card: Rect,
-    pub col_row: Rect,
     pub light_card: Rect,
     pub light_rows: [Rect; 5],
     pub sound_card: Rect,
     pub sound_rows: [Rect; 7],
+    pub mesh_card: Rect,
+    pub mesh_rows: [Rect; 3],
     pub btn_voxelize: Rect,
     pub btn_script: Rect,
     pub btn_grab_pose: Rect,

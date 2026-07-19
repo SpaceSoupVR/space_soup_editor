@@ -60,6 +60,8 @@ pub(crate) fn new_object(
         terrain_collider: None,
         light: None,
         sound: None,
+        particle_emitter: None,
+        laser: None,
     }
 }
 
@@ -87,10 +89,6 @@ pub(crate) fn save_scene(
     Ok(path)
 }
 
-/// Persists the scene if it has unsaved changes. The isolated single-object
-/// editors (grab pose, object preview, anim sim) have no save affordance of
-/// their own, so without this a closed edit silently never reaches disk —
-/// and never reaches the Quest, which loads scene JSON from device storage.
 pub(crate) fn save_if_dirty(app: &mut super::App) {
     if !app.scene_dirty {
         return;
