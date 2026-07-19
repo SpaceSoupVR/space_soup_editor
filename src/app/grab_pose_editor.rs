@@ -51,6 +51,7 @@ fn default_grip_point(existing: &[GripPointDef], hand: Hand) -> GripPointDef {
         local_rot: identity_quat_arr(),
         hand_offset_scale: one_vec3_arr(),
         finger_curl: HashMap::new(),
+        grab_range: None,
     }
 }
 

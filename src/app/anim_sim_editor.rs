@@ -1,7 +1,3 @@
-//! Animation Simulation Editor — full-screen overlay (cloned from the grab
-//! pose editor's structure) for authoring keyframe animations and controller
-//! bindings on a single `GameObject`, with live preview playback.
-
 use glam::{EulerRot, Quat, Vec3};
 
 use space_soup::renderer::mesh_pipeline::ModelUniform;
@@ -11,12 +7,10 @@ use space_soup_engine::{Animation, AnimationBinding, Easing, GameObject, Keyfram
 
 use super::App;
 
-/// Snap grid choices for keyframe times (seconds).
 pub(crate) const SNAP_STEPS: [f32; 4] = [0.05, 0.1, 0.25, 0.5];
-/// Preview speed choices.
+
 pub(crate) const SPEED_STEPS: [f32; 5] = [0.25, 0.5, 1.0, 2.0, 4.0];
 
-/// Human labels paired with the engine's canonical binding button ids.
 pub(crate) const BUTTON_OPTIONS: [(&str, &str); 6] = [
     ("A", "btn_a"),
     ("B", "btn_b"),
@@ -54,9 +48,7 @@ impl AnimSnapshot {
     }
 }
 
-/// Identifies a continuous drag on one field so its many per-frame edits fold
-/// into a single undo entry instead of flooding (and evicting) the stack.
-/// `(anim_index, key_index, field_code)`.
+
 #[derive(Clone, Copy, PartialEq, Eq)]
 struct EditKey(usize, usize, u8);
 
@@ -69,9 +61,7 @@ fn field_code(f: KeyField) -> u8 {
     }
 }
 
-/// One undoable state: the object's animation data plus the editor tool
-/// settings (snap grid, preview speed) so those are undoable too, not just
-/// keyframe edits.
+
 #[derive(Clone, PartialEq)]
 struct AnimUndoState {
     data: AnimSnapshot,
@@ -99,7 +89,6 @@ impl AnimUndoState {
 struct AnimEdit {
     before: AnimUndoState,
     after: AnimUndoState,
-    /// The drag this entry belongs to, if any; used to coalesce follow-up frames.
     coalesce: Option<EditKey>,
 }
 
@@ -109,43 +98,25 @@ pub(crate) struct AnimSimEditorState {
     pub object_id: String,
     pub orbit: super::orbit_camera::OrbitCamera,
 
-    /// The preview draws the object relative to this world point (rendered at
-    /// the origin), so it opens centred and the object's world position in the
-    /// base editor never shifts it here. Anchored to the animation's first
-    /// positioned keyframe (fallback: the object's rest position); see
-    /// [`compute_display_origin`].
     display_origin: Vec3,
 
     pub selected_anim: usize,
     pub selected_key: Option<usize>,
 
-    /// Internal preview player; `elapsed` doubles as the scrub playhead.
     pub player: AnimationPlayer,
     pub playing: bool,
     pub speed: f32,
 
-    /// Keyframe-time snapping grid (None = off).
     pub snap_step: Option<f32>,
 
-    /// The "you have unsaved changes" dialog is up; the panel draws only it.
     pub confirm_exit: bool,
 
     pub content_height: f32,
 
-    /// Animations + bindings as of open/last save. Exit-without-saving restores
-    /// this, so edits stay local to the editor until saved (main-view Save
-    /// Scene then persists them to disk with the rest of the scene).
     saved: AnimSnapshot,
 
-    /// Sticky euler angles for the keyframe rotation currently being edited:
-    /// `(anim_index, key_index, [x, y, z] degrees)`. Editing rotation through a
-    /// quat round-trip hits gimbal lock (in YXZ order the middle X axis locks
-    /// near ±90°, collapsing Y and Z). Holding the euler here and only rebuilding
-    /// the quat keeps the three fields independent no matter the orientation.
     rot_edit: Option<(usize, usize, [f32; 3])>,
 
-    /// The drag currently coalescing into the top undo entry; cleared each frame
-    /// no field edit arrives (i.e. the drag ended).
     active_coalesce: Option<EditKey>,
 
     undo: Vec<AnimEdit>,
@@ -160,7 +131,6 @@ impl AnimSimEditorState {
         first_anim: &Animation,
         saved: AnimSnapshot,
     ) -> Self {
-        // Object is drawn centred at the origin, so the camera targets the origin.
         let mut orbit = super::orbit_camera::OrbitCamera::new(framing_radius);
         orbit.target = Vec3::ZERO;
         Self {
@@ -192,8 +162,6 @@ impl AnimSimEditorState {
         }
     }
 
-    /// Ends any in-progress drag coalescing. Called each frame no field edit is
-    /// received, so the next drag starts a fresh undo entry.
     pub(crate) fn end_coalesce(&mut self) {
         self.active_coalesce = None;
     }
@@ -205,7 +173,6 @@ impl AnimSimEditorState {
         !self.redo.is_empty()
     }
 
-    /// Whether the animations/bindings differ from the last save (or open).
     pub fn dirty(&self, scene: &Scene) -> bool {
         scene
             .find_object(&self.object_id)
@@ -213,13 +180,6 @@ impl AnimSimEditorState {
             .unwrap_or(false)
     }
 
-    /// Euler angles (degrees, `[x, y, z]`) to show/edit for a keyframe's
-    /// rotation, expressed in the display (rest-relative) frame — `disp` is the
-    /// display rotation offset, so `disp * q` is the rotation relative to rest.
-    /// Editing here (rather than on the raw world quat) keeps the axes clean the
-    /// way grab pose does, since the rest pose reads as (0, 0, 0) instead of a
-    /// gimbal-locked laying-down orientation. Prefers the sticky `rot_edit` value
-    /// mid-edit so repeated drags don't re-decompose.
     pub(crate) fn euler_for_key(
         &self,
         anim_idx: usize,
@@ -259,10 +219,7 @@ fn unique_anim_name(existing: &[Animation], base: &str) -> String {
     }
 }
 
-/// A keyframe capturing the object's current scene transform. `scale` maps to
-/// `cuboid.half_size` (matching how the runtime applies keyframe scale).
 fn capture_keyframe(obj: &GameObject, t: f32) -> Keyframe {
-    // The sim animates position + rotation + scale; color is left unset.
     Keyframe {
         t,
         position: Some(obj.cuboid.position),
@@ -281,17 +238,6 @@ fn default_animation(obj: &GameObject) -> Animation {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Open / save / exit — edits live in the scene while the editor is open, but
-// only stick if saved; exiting restores the last-saved state. Saving here only
-// commits to the in-memory scene: writing to disk stays with the main view's
-// Save Scene button.
-// ---------------------------------------------------------------------------
-
-/// The display anchor (world origin of the preview) for an object + animation:
-/// the animation's first positioned keyframe, falling back to the object's rest
-/// position. Anchoring to the animation itself means the object's world
-/// position in the base editor never shifts the preview, and it opens centred.
 fn compute_display_origin(obj: &GameObject, anim: Option<&Animation>) -> Vec3 {
     anim.and_then(|a| a.keyframes.iter().find_map(|k| k.position))
         .unwrap_or(obj.cuboid.position)
@@ -323,7 +269,6 @@ fn close(app: &mut App) {
     super::scene_bridge::save_if_dirty(app);
 }
 
-/// Commit the current animations/bindings as the saved state (kept when exiting).
 pub(crate) fn save(app: &mut App) {
     let Some(state) = app.anim_sim_editor.as_mut() else {
         return;
@@ -334,7 +279,6 @@ pub(crate) fn save(app: &mut App) {
     }
 }
 
-/// Exit button: close right away when clean, else ask.
 pub(crate) fn request_exit(app: &mut App) {
     let dirty = app
         .anim_sim_editor
@@ -350,7 +294,6 @@ pub(crate) fn request_exit(app: &mut App) {
     }
 }
 
-/// Confirm dialog "Exit": throw away everything since the last save.
 pub(crate) fn exit_discard(app: &mut App) {
     if let Some(state) = app.anim_sim_editor.as_ref() {
         let saved = state.saved.clone();
@@ -362,21 +305,17 @@ pub(crate) fn exit_discard(app: &mut App) {
     close(app);
 }
 
-/// Confirm dialog "Save then Exit".
 pub(crate) fn exit_save(app: &mut App) {
     save(app);
     close(app);
 }
 
-/// Confirm dialog "Return": stay in the editor.
 pub(crate) fn cancel_exit(app: &mut App) {
     if let Some(state) = app.anim_sim_editor.as_mut() {
         state.confirm_exit = false;
     }
 }
 
-/// Re-anchor and point the camera back at the object after panning/zooming
-/// away. The object always sits at the origin, so this recentres on it.
 pub(crate) fn recenter_view(app: &mut App) {
     let Some(state) = app.anim_sim_editor.as_ref() else {
         return;
@@ -393,9 +332,6 @@ pub(crate) fn recenter_view(app: &mut App) {
     }
 }
 
-// ---------------------------------------------------------------------------
-// Lookup helpers
-// ---------------------------------------------------------------------------
 
 pub(crate) fn current_anim<'a>(state: &AnimSimEditorState, scene: &'a Scene) -> Option<&'a Animation> {
     scene
@@ -408,26 +344,16 @@ fn current_duration(state: &AnimSimEditorState, scene: &Scene) -> f32 {
     current_anim(state, scene).map(|a| a.duration()).unwrap_or(0.0)
 }
 
-/// Display-only rotation applied on top of the object's orientation in the
-/// preview: cancels the resting rotation so the object shows upright/modeled.
-/// Same for every mode; never persisted. Rotation editing also happens in this
-/// frame, so the resting pose reads as (0, 0, 0) and the axes stay independent
-/// (no gimbal lock from starting at a laying-down world orientation).
 pub(crate) fn display_rotation_offset(obj: &GameObject) -> Quat {
     obj.cuboid.rotation.inverse()
 }
 
-/// Sampled preview values at the current playhead for the selected animation.
 pub(crate) fn preview_sample(state: &AnimSimEditorState, scene: &Scene) -> Sample {
     match current_anim(state, scene) {
         Some(anim) => sample(anim, state.player.elapsed),
         None => Sample::default(),
     }
 }
-
-// ---------------------------------------------------------------------------
-// Playback
-// ---------------------------------------------------------------------------
 
 pub(crate) fn update_playback(app: &mut App, dt: f32) {
     let Some(state) = app.anim_sim_editor.as_ref() else {
@@ -525,20 +451,10 @@ pub(crate) fn step_playhead(app: &mut App, dir: f32) {
     seek(app, t + dir * step);
 }
 
-// ---------------------------------------------------------------------------
-// Undo/redo plumbing — every mutation goes through `with_edit`. Note edits do
-// NOT mark the scene dirty: that happens on save (exiting without saving
-// restores everything).
-// ---------------------------------------------------------------------------
-
 fn with_edit(app: &mut App, f: impl FnOnce(&mut GameObject, &mut AnimSimEditorState)) {
     with_edit_coalesced(app, None, f);
 }
 
-/// Like `with_edit`, but when `token` matches the drag already folding into the
-/// top undo entry, the entry's `after` is extended in place rather than pushing
-/// a new one. Keeps a whole drag as one undoable step so undo isn't reduced to
-/// nudging back single frames (which also used to evict older real edits).
 fn with_edit_coalesced(
     app: &mut App,
     token: Option<EditKey>,
@@ -631,7 +547,6 @@ pub(crate) fn redo(app: &mut App) {
     app.anim_sim_editor = Some(state);
 }
 
-/// Tool settings go through `with_edit` too so they land on the undo stack.
 pub(crate) fn set_snap_step(app: &mut App, step: Option<f32>) {
     with_edit(app, |_, state| state.snap_step = step);
 }
@@ -639,10 +554,6 @@ pub(crate) fn set_snap_step(app: &mut App, step: Option<f32>) {
 pub(crate) fn set_speed(app: &mut App, speed: f32) {
     with_edit(app, |_, state| state.speed = speed);
 }
-
-// ---------------------------------------------------------------------------
-// Animation list operations
-// ---------------------------------------------------------------------------
 
 pub(crate) fn select_anim(app: &mut App, index: usize) {
     let Some(state) = app.anim_sim_editor.as_mut() else {
@@ -659,7 +570,6 @@ pub(crate) fn select_anim(app: &mut App, index: usize) {
     state.selected_key = current_anim(&state, app.runtime.scene())
         .filter(|a| !a.keyframes.is_empty())
         .map(|_| 0);
-    // Re-anchor the preview to the newly selected animation so it stays centred.
     if let Some(obj) = app.runtime.scene().find_object(&state.object_id) {
         state.display_origin = compute_display_origin(obj, current_anim(&state, app.runtime.scene()));
     }
@@ -683,7 +593,6 @@ pub(crate) fn delete_anim(app: &mut App) {
             return;
         }
         let removed = obj.animations.remove(state.selected_anim);
-        // Bindings pointing at the removed animation become unassigned.
         for b in &mut obj.animation_bindings {
             if b.animation == removed.name {
                 b.animation = String::new();
@@ -713,7 +622,6 @@ pub(crate) fn rename_anim(app: &mut App, new_name: String) {
         };
         let old = anim.name.clone();
         anim.name = trimmed.clone();
-        // Keep bindings pointing at the renamed animation.
         for b in &mut obj.animation_bindings {
             if b.animation == old {
                 b.animation = trimmed.clone();
@@ -748,7 +656,6 @@ pub(crate) fn copy_anim(app: &mut App) {
     }
 }
 
-/// Paste the clipboard animation onto this object (export/import across objects).
 pub(crate) fn paste_anim(app: &mut App) {
     let Some(mut anim) = app.anim_clipboard.clone() else {
         return;
@@ -766,10 +673,6 @@ pub(crate) fn paste_anim(app: &mut App) {
     });
 }
 
-// ---------------------------------------------------------------------------
-// Keyframe operations
-// ---------------------------------------------------------------------------
-
 fn sort_keyframes(anim: &mut Animation, follow: Option<&Keyframe>) -> Option<usize> {
     anim.keyframes
         .sort_by(|a, b| a.t.partial_cmp(&b.t).unwrap_or(std::cmp::Ordering::Equal));
@@ -784,7 +687,6 @@ pub(crate) fn select_key(app: &mut App, index: usize) {
     state.rot_edit = None;
     let mut state = app.anim_sim_editor.take().unwrap();
     clamp_selection(&mut state, app.runtime.scene());
-    // Jump the playhead to the selected keyframe for quick inspection.
     if let (Some(i), Some(anim)) = (state.selected_key, current_anim(&state, app.runtime.scene()))
     {
         if let Some(k) = anim.keyframes.get(i) {
@@ -796,8 +698,6 @@ pub(crate) fn select_key(app: &mut App, index: usize) {
     app.anim_sim_editor = Some(state);
 }
 
-/// Add a keyframe at the current playhead, baking the interpolated pose so the
-/// motion is unchanged at that instant.
 pub(crate) fn add_key_at_playhead(app: &mut App) {
     let baked = app
         .anim_sim_editor
@@ -824,7 +724,6 @@ pub(crate) fn add_key_at_playhead(app: &mut App) {
     });
 }
 
-/// Capture the object's *actual* scene transform as a keyframe at the playhead.
 pub(crate) fn capture_pose_key(app: &mut App) {
     with_edit(app, |obj, state| {
         state.rot_edit = None;
@@ -863,7 +762,6 @@ pub(crate) fn copy_key(app: &mut App) {
     }
 }
 
-/// Paste the clipboard keyframe into the selected animation at the playhead.
 pub(crate) fn paste_key(app: &mut App) {
     let Some(mut key) = app.keyframe_clipboard.clone() else {
         return;
@@ -884,13 +782,11 @@ pub(crate) fn paste_key(app: &mut App) {
 pub(crate) enum KeyField {
     T,
     Pos(usize),
-    /// Euler degrees, axis-indexed [X, Y, Z] (stored back via YXZ order).
     RotEuler(usize),
     Scale(usize),
 }
 
 pub(crate) fn edit_key_field(app: &mut App, field: KeyField, value: f32) {
-    // Fold this field's drag frames into one undo entry.
     let token = app.anim_sim_editor.as_ref().and_then(|s| {
         s.selected_key
             .map(|k| EditKey(s.selected_anim, k, field_code(field)))
@@ -911,7 +807,6 @@ pub(crate) fn edit_key_field(app: &mut App, field: KeyField, value: f32) {
                 if let Some(new_i) = state.selected_key {
                     state.player.elapsed = anim.keyframes[new_i].t;
                 }
-                // Re-sorting can shuffle indices; drop any sticky rotation edit.
                 state.rot_edit = None;
             }
             KeyField::Pos(axis) => {
@@ -920,15 +815,8 @@ pub(crate) fn edit_key_field(app: &mut App, field: KeyField, value: f32) {
                 key.position = Some(p);
             }
             KeyField::RotEuler(axis) => {
-                // Edit in the display (rest-relative) frame so the three axes
-                // stay independent — same clean behaviour as the grab pose
-                // editor, whose grip rotations start from identity. `disp * q` is
-                // the rest-relative rotation; we edit its euler, then map back to
-                // world with `disp.inverse()` (== the object's resting rotation).
                 let disp = obj.cuboid.rotation.inverse();
                 let q = key.rotation.unwrap_or(obj.cuboid.rotation);
-                // Axis-indexed [X, Y, Z]; glam's YXZ decomposition returns
-                // (Y, X, Z), rebuilt below in that order.
                 let mut deg = state.euler_for_key(state.selected_anim, i, q, disp);
                 deg[axis] = value;
                 let d = Quat::from_euler(
@@ -956,11 +844,8 @@ pub(crate) enum KeyChannel {
     Scale,
 }
 
-/// Toggle a channel on/off for the selected keyframe. Enabling seeds it from
-/// the object's current transform.
 pub(crate) fn toggle_key_channel(app: &mut App, channel: KeyChannel) {
     with_edit(app, |obj, state| {
-        // Toggling rotation off/on resets the quat; drop any sticky euler.
         state.rot_edit = None;
         let Some(i) = state.selected_key else { return };
         let (pos, rot, half) = (
@@ -987,10 +872,6 @@ pub(crate) fn toggle_key_channel(app: &mut App, channel: KeyChannel) {
         }
     });
 }
-
-// ---------------------------------------------------------------------------
-// Controller bindings
-// ---------------------------------------------------------------------------
 
 pub(crate) fn add_binding(app: &mut App) {
     with_edit(app, |obj, state| {
@@ -1024,21 +905,15 @@ pub(crate) fn edit_binding(app: &mut App, index: usize, f: impl FnOnce(&mut Anim
     });
 }
 
-// ---------------------------------------------------------------------------
-// Rendering
-// ---------------------------------------------------------------------------
-
 const KEY_MARKER_HALF: f32 = 0.012;
 
-/// Object cuboid (when it has no mesh) at the sampled preview transform, plus
-/// small marker cubes at every keyframe that carries a position.
 pub(crate) fn collect_cuboids(state: &AnimSimEditorState, scene: &Scene) -> Vec<Cuboid> {
     let Some(obj) = scene.find_object(&state.object_id) else {
         return Vec::new();
     };
     let s = preview_sample(state, scene);
     let disp = display_rotation_offset(obj);
-    // World position -> centred preview space (object drawn at the origin).
+
     let to_view = |p: Vec3| p - state.display_origin;
     let mut out = Vec::new();
 
@@ -1072,9 +947,6 @@ pub(crate) fn collect_cuboids(state: &AnimSimEditorState, scene: &Scene) -> Vec<
     out
 }
 
-/// Applies the sampled preview transform to the object's mesh (if any).
-/// Matches the runtime: `rotation * mesh.rotation_offset`, mesh keeps its own
-/// scale (keyframe scale only affects cuboid half-size).
 pub(crate) fn update_transforms(
     state: &AnimSimEditorState,
     scene: &Scene,

@@ -92,7 +92,13 @@ impl super::App {
                         teleport_target: None,
                     },
                 );
-                self.runtime.update(dt, &inputs)
+                // Editor preview doesn't render particles/lasers (no
+                // authoring UI for them yet, see the particle/laser feature
+                // plan) — discard those two fields rather than threading
+                // them through this preview path for nothing.
+                let (c, m, l, _particle_emitters, _lasers, scene_change) =
+                    self.runtime.update(dt, &inputs);
+                (c, m, l, scene_change)
             };
 
         if let Some(next) = scene_change {
@@ -470,6 +476,7 @@ impl super::App {
             self.view_mode == ViewMode::Edit,
             &mut self.inspector_rot_edit,
             &packet,
+            &self.mesh_cache,
         );
         self.scene_dirty = scene_dirty;
         if let Some((clip, volume, pitch)) = preview_sound {

@@ -32,6 +32,10 @@ pub(crate) fn draw(
     editable: bool,
     rot_edit: &mut Option<(String, [f32; 3])>,
     _packet: &space_soup_engine::DebugPacket,
+    mesh_cache: &std::collections::HashMap<
+        String,
+        (space_soup::renderer::GltfMesh, space_soup::renderer::mesh_pipeline::ModelUniform),
+    >,
 ) {
     ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
 
@@ -91,6 +95,7 @@ pub(crate) fn draw(
                 rot_edit,
                 open_object_preview,
                 preview_sound,
+                mesh_cache,
             );
             let ch = (bottom_y + scroll_y) - iy + theme.px(12.0);
             ui.end_scroll_area(scroll_id, layout.inspector, ch);
@@ -194,24 +199,43 @@ fn draw_object_cards(
     rot_edit: &mut Option<(String, [f32; 3])>,
     open_object_preview: &mut Option<String>,
     preview_sound: &mut Option<(String, f32, f32)>,
+    mesh_cache: &std::collections::HashMap<
+        String,
+        (space_soup::renderer::GltfMesh, space_soup::renderer::mesh_pipeline::ModelUniform),
+    >,
 ) -> f32 {
     let (has_light, has_sound) = {
         let obj = scene.find_object(id).unwrap();
         (obj.light.is_some(), obj.sound.is_some())
     };
-    let cards = layout.inspector_cards(theme, body_top, has_light, has_sound);
 
-    let (obj_position, obj_half_size, obj_rotation, obj_color, has_script, has_mesh) = {
+    let (obj_position, obj_half_size, obj_rotation, has_script, has_mesh, mesh_path, anim_names) = {
         let obj = scene.find_object(id).unwrap();
         (
             obj.cuboid.position,
             obj.cuboid.half_size,
             obj.cuboid.rotation,
-            obj.cuboid.color,
             obj.script.is_some(),
             obj.mesh.is_some(),
+            obj.mesh.as_ref().map(|m| m.path.clone()),
+            obj.animations.iter().map(|a| a.name.clone()).collect::<Vec<_>>(),
         )
     };
+
+    let cards = layout.inspector_cards(theme, body_top, has_light, has_sound, has_mesh);
+
+    let mesh_info = mesh_path.as_ref().map(|path| {
+        let skinned = mesh_cache
+            .get(path)
+            .map(|(mesh, _)| mesh.is_skinned())
+            .unwrap_or(false);
+        let embedded_clips = mesh_cache
+            .get(path)
+            .and_then(|(mesh, _)| mesh.skin.as_ref())
+            .map(|skin| skin.animations.len())
+            .unwrap_or(0);
+        (path.clone(), skinned, embedded_clips)
+    });
 
     ui.label_styled(
         cards.name_row[0],
@@ -401,12 +425,31 @@ fn draw_object_cards(
         *rot_edit = None;
     }
 
-    if !has_light && !has_sound {
-        draw_card_header(ui, theme, cards.col_card, hdr_h, "COLOR");
-        ui.color_swatch(
-            cards.col_row,
-            Color(obj_color.0, obj_color.1, obj_color.2, 255),
+    if let Some((path, skinned, embedded_clips)) = &mesh_info {
+        draw_card_header(ui, theme, cards.mesh_card, hdr_h, "MESH");
+        draw_readonly_value(ui, theme, cards.mesh_rows[0], path, clip_ins);
+        draw_readonly_value(
+            ui,
+            theme,
+            cards.mesh_rows[1],
+            &format!("Skinned: {}", if *skinned { "yes" } else { "no" }),
+            clip_ins,
         );
+        // The glb's own baked clip names are parsed (informational only —
+        // not full keyframe tracks, and there's no player for them yet), so
+        // they're noted but kept clearly separate from what "Simulate
+        // Animations" below actually plays: the scene-authored list.
+        let anim_line = match (anim_names.is_empty(), *embedded_clips) {
+            (true, 0) => "Animations: none".to_string(),
+            (true, n) => format!("Animations: none ({n} in .glb, not playable)"),
+            (false, 0) => format!("Animations: {} ({})", anim_names.len(), anim_names.join(", ")),
+            (false, n) => format!(
+                "Animations: {} ({}) — +{n} in .glb, not playable",
+                anim_names.len(),
+                anim_names.join(", ")
+            ),
+        };
+        draw_readonly_value(ui, theme, cards.mesh_rows[2], &anim_line, clip_ins);
     }
 
     if has_mesh && ui.button_secondary(cards.btn_voxelize, "Voxelize") {

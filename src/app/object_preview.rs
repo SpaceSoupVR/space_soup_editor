@@ -93,9 +93,6 @@ const BONE_COLOR: Color3 = Color3(40, 150, 200, 220);
 const JOINT_HALF: f32 = 0.015;
 const BONE_THICKNESS: f32 = 0.006;
 
-/// Joint markers + bone segments for the previewed object's mesh skin, in
-/// its bind pose (not any animated/finger-curl-blended pose — this is a
-/// static "here's the generated skeleton" view, not a live rig preview).
 pub(crate) fn collect_skeleton_cuboids(
     state: &ObjectPreviewState,
     scene: &Scene,

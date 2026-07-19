@@ -25,8 +25,6 @@ impl OrbitCamera {
         self.target - self.rotation() * Vec3::NEG_Z * self.distance
     }
 
-    /// Snap back onto a subject after panning/zooming away: re-aims the target
-    /// and resets the distance to frame it, keeping the current view angle.
     pub fn refocus(&mut self, target: Vec3, framing_radius: f32) {
         self.target = target;
         self.distance = (framing_radius * 3.0).max(0.5);
