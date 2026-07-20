@@ -57,6 +57,16 @@ pub(crate) enum EditorTool {
     Snap,
 }
 
+/// Which page of the contextual ribbon is showing. Selected from the title
+/// bar, Roblox-Studio style: Build = tools/gizmo, Insert = the model/light/
+/// sound chips, Object = actions on the selected object.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum RibbonTab {
+    Build,
+    Insert,
+    Object,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum EditTarget {
     SceneFile,
@@ -94,6 +104,7 @@ pub(crate) struct App {
     pub(crate) mouse_held: Vec<AMouseButton>,
     pub(crate) scroll_y: f32,
 
+    /// Horizontal scroll offset of the ribbon Insert tab's chip row.
     pub(crate) model_scroll_y: f32,
     pub(crate) text_input: String,
     pub(crate) named_keys: Vec<agate::input::NamedKey>,
@@ -104,7 +115,21 @@ pub(crate) struct App {
     pub(crate) last_tick: Instant,
     pub(crate) scale: f32,
 
+    /// Whole-scene snapshots for inspector-driven undo/redo. Each entry is the
+    /// scene as it was *before* an inspector edit; `undo` restores the top of
+    /// `undo_stack` and moves the current scene onto `redo_stack`.
+    pub(crate) undo_stack: Vec<space_soup_engine::Scene>,
+    pub(crate) redo_stack: Vec<space_soup_engine::Scene>,
+    /// True while a slider/drag edit is mid-flight, so the whole drag collapses
+    /// into one undo entry instead of one per frame.
+    pub(crate) undo_coalescing: bool,
+
     pub(crate) mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
+    /// One `ModelUniform` per *object id*, not per mesh path. Two objects can
+    /// share a path (duplicating one is the common case) and a shared uniform
+    /// is a single GPU buffer, so the second upload clobbers the first and both
+    /// draw at the last object's transform.
+    pub(crate) instance_models: HashMap<String, ModelUniform>,
     pub(crate) mesh_base_half_size: HashMap<String, glam::Vec3>,
     pub(crate) debug_meshes: Vec<(GltfMesh, ModelUniform)>,
     pub(crate) icon_assets: Option<IconAssets>,
@@ -125,6 +150,9 @@ pub(crate) struct App {
     pub(crate) press_in_chrome: bool,
     pub(crate) last_mouse_pos: (f32, f32),
     pub(crate) left_down: bool,
+    /// Right button held — drives free-look camera rotation in the Edit
+    /// viewport, so left-drag stays free for selection and object moves.
+    pub(crate) right_down: bool,
     pub(crate) dragged: bool,
     /// Which WASDQE fly keys are held (base-editor free-look movement).
     pub(crate) fly: edit_camera::FlyInput,
@@ -151,6 +179,7 @@ pub(crate) struct App {
     pub(crate) available_models: Vec<PathBuf>,
 
     pub(crate) tool: EditorTool,
+    pub(crate) ribbon_tab: RibbonTab,
     pub(crate) rig_selection: Vec<String>,
     pub(crate) snap_hand: Hand,
     pub(crate) snap_selected_joint: Option<usize>,
@@ -205,7 +234,11 @@ impl App {
             runtime,
             last_tick: Instant::now(),
             scale: 1.0,
+            undo_stack: Vec::new(),
+            redo_stack: Vec::new(),
+            undo_coalescing: false,
             mesh_cache: HashMap::new(),
+            instance_models: HashMap::new(),
             mesh_base_half_size: HashMap::new(),
             debug_meshes: Vec::new(),
             icon_assets: None,
@@ -226,6 +259,7 @@ impl App {
             press_in_chrome: false,
             last_mouse_pos: (0.0, 0.0),
             left_down: false,
+            right_down: false,
             dragged: false,
             fly: edit_camera::FlyInput::default(),
 
@@ -249,6 +283,7 @@ impl App {
             available_models: models,
 
             tool: EditorTool::Select,
+            ribbon_tab: RibbonTab::Build,
             rig_selection: Vec::new(),
             snap_hand: Hand::Right,
             snap_selected_joint: None,

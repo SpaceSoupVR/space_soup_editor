@@ -98,15 +98,23 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
                 }
                 app.dragged = true;
             }
-        } else if !app.press_in_chrome && (dx.abs() > 0.5 || dy.abs() > 0.5) {
-            app.dragged = true;
-            app.edit_camera.look(dx, dy);
         }
+    }
+
+    // Free-look is right-drag now (left stays for selection / gizmo / moving).
+    if app.right_down
+        && app.view_mode == ViewMode::Edit
+        && app.editing.is_none()
+        && over_viewport
+        && (dx.abs() > 0.5 || dy.abs() > 0.5)
+    {
+        app.edit_camera.look(dx, dy);
     }
 
     if app.dragging_new_object.is_some() {
         let (o, d) = app.screen_ray(new.0, new.1, win_w, win_h);
-        let in_center = over_viewport && new.1 < layout.model_tray(&theme)[1];
+        // Below the doc-tab strip — the tab row shouldn't take drops.
+        let in_center = over_viewport && new.1 > layout.editor_body[1];
         app.ghost_preview = if in_center {
             ray_plane_intersect(o, d, 0.0)
         } else {
@@ -335,6 +343,13 @@ fn preview_left_button(app: &mut App, state: ElementState) {
     app.redraw_now();
 }
 
+/// Right button only drives free-look in the main Edit viewport; it just
+/// tracks the held state, and `cursor_moved` does the camera rotation.
+pub(crate) fn right_button(app: &mut App, state: ElementState) {
+    app.right_down = matches!(state, ElementState::Pressed);
+    app.redraw_now();
+}
+
 pub(crate) fn left_button(app: &mut App, state: ElementState) {
     if app.grab_pose_editor.is_some() {
         grab_pose_left_button(app, state);
@@ -365,19 +380,30 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
             app.mouse_held.push(AMouseButton::Left);
             app.editor_focused = app.editing.is_some() && in_rect(mp, layout.editor_body);
 
+            // The doc-tab strip sits inside `center` but is chrome, not
+            // viewport — without this, tab clicks would fall through into
+            // object picking underneath.
             app.press_in_chrome = !in_rect(mp, layout.center)
                 || in_rect(mp, layout.navigator)
-                || in_rect(mp, layout.inspector);
+                || in_rect(mp, layout.inspector)
+                || in_rect(mp, layout.editor_tab);
 
             if app.view_mode == ViewMode::Edit && app.editing.is_none() {
                 let mp2 = Vec2::new(mp.0, mp.1);
 
-                let model_list_area = layout.model_list_area(&theme);
+                // Chips live in the ribbon's Insert tab now; only hit-test
+                // them when that page is showing.
+                let chip_area = layout.ribbon_chip_area(&theme);
                 let total_chips = PRIMITIVE_PALETTE_COUNT + app.available_models.len();
-                let chip_rects = layout.model_rects(&theme, total_chips, app.model_scroll_y);
-                let clicked_chip = chip_rects
-                    .iter()
-                    .position(|r| in_rect(mp, *r) && in_rect(mp, model_list_area));
+                let chip_rects =
+                    layout.ribbon_chip_rects(&theme, total_chips, app.model_scroll_y);
+                let clicked_chip = if app.ribbon_tab == super::super::RibbonTab::Insert {
+                    chip_rects
+                        .iter()
+                        .position(|r| in_rect(mp, *r) && in_rect(mp, chip_area))
+                } else {
+                    None
+                };
 
                 if let Some(i) = clicked_chip {
                     app.dragging_new_object = Some(if i == 0 {

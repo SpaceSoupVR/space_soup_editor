@@ -23,7 +23,7 @@ pub(crate) fn draw(
     nav_objects_open: &mut bool,
     packet: &DebugPacket,
 ) -> Option<usize> {
-    ui.panel_bordered(layout.navigator, t::SIDEBAR_BG);
+    ui.panel_bordered_flat(layout.navigator, t::SIDEBAR_BG);
 
     let nav = layout.navigator;
     let footer_h = theme.px(FOOTER_H);

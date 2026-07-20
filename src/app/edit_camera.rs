@@ -49,6 +49,14 @@ impl EditCamera {
         Vec3::new(self.yaw.cos(), 0.0, -self.yaw.sin())
     }
 
+    /// Jumps the camera to frame `target`, keeping the angle it's already
+    /// looking from — same framing distance as `OrbitCamera::refocus`, so
+    /// snapping onto a subject lands the same way in either view.
+    pub fn focus_on(&mut self, target: Vec3, framing_radius: f32) {
+        let distance = (framing_radius * 3.0).max(0.5);
+        self.position = target - self.forward() * distance;
+    }
+
     pub fn look(&mut self, dx: f32, dy: f32) {
         self.yaw -= dx * 0.006;
 
