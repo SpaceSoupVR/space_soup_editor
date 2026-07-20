@@ -48,6 +48,13 @@ pub(crate) fn handle_window_event(
         } => {
             mouse::left_button(app, state);
         }
+        WindowEvent::MouseInput {
+            state,
+            button: winit::event::MouseButton::Right,
+            ..
+        } => {
+            mouse::right_button(app, state);
+        }
 
         WindowEvent::PinchGesture { delta, phase, .. } => {
             gesture::pinch(app, delta, phase);

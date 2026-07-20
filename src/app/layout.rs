@@ -3,36 +3,49 @@ use agate::{rect_from, Flow, Region};
 
 pub(crate) use agate::{in_rect, Rect};
 
-pub(crate) const TOOLBAR_H: f32 = 56.0;
+/// Slim strip: view modes (left), ribbon tab selector (center), save/undo (right).
+pub(crate) const TITLEBAR_H: f32 = 40.0;
+/// The Roblox-style contextual tool row under the title bar; its contents
+/// swap with the active `RibbonTab`.
+pub(crate) const RIBBON_H: f32 = 64.0;
 pub(crate) const STATUSBAR_H: f32 = 28.0;
 pub(crate) const NAVIGATOR_W: f32 = 256.0;
 pub(crate) const INSPECTOR_W: f32 = 300.0;
 pub(crate) const TAB_BAR_H: f32 = 28.0;
 pub(crate) const ROW_H: f32 = 30.0;
 pub(crate) const PAD: f32 = 12.0;
-pub(crate) const PANEL_GAP: f32 = 12.0;
-pub(crate) const WINDOW_MARGIN: f32 = 16.0;
+pub(crate) const PANEL_GAP: f32 = 0.0;
+/// Inset of the whole UI from the window edges. Zero so the outer panels
+/// (title bar, navigator, inspector, status bar) sit flush against the screen;
+/// `PANEL_GAP` still separates panels from each other.
+pub(crate) const WINDOW_MARGIN: f32 = 0.0;
 
 pub(crate) struct Layout {
     /// The whole window, for full-screen overlays like confirm dialogs.
     pub window: Rect,
-    pub toolbar: Rect,
+    pub titlebar: Rect,
+    pub ribbon: Rect,
     pub navigator: Rect,
     pub inspector: Rect,
     pub statusbar: Rect,
     pub center: Rect,
+    /// Document-tab strip above the viewport ("Scene" + open file); the
+    /// grab-pose/anim-sim/preview sub-editors reuse it as their header bar.
     pub editor_tab: Rect,
     pub editor_body: Rect,
     pub seg: [Rect; 4],
     pub seg_pill: Rect,
-    pub btn_editor: Rect,
+    pub ribbon_tabs: [Rect; 3],
     pub btn_save: Rect,
     pub btn_save_scene: Rect,
+    pub btn_undo: Rect,
+    pub btn_redo: Rect,
 }
 
 impl Layout {
     pub fn new(win_w: f32, win_h: f32, theme: &Theme) -> Self {
-        let tb_h = theme.px(TOOLBAR_H);
+        let tb_h = theme.px(TITLEBAR_H);
+        let rb_h = theme.px(RIBBON_H);
         let sb_h = theme.px(STATUSBAR_H);
         let nav_w = theme.px(NAVIGATOR_W);
         let ins_w = theme.px(INSPECTOR_W);
@@ -41,7 +54,8 @@ impl Layout {
         let gap = theme.px(PANEL_GAP);
 
         let window = Region::new(rect_from(0.0, 0.0, win_w, win_h)).inset(margin);
-        let (toolbar, rest) = window.split_top_gap(tb_h, gap);
+        let (titlebar, rest) = window.split_top_gap(tb_h, gap);
+        let (ribbon, rest) = rest.split_top_gap(rb_h, gap);
         let (statusbar, rest) = rest.split_bottom_gap(sb_h, gap);
         let (navigator, rest) = rest.split_left_gap(nav_w, gap);
         let (inspector, center_region) = rest.split_right_gap(ins_w, gap);
@@ -51,10 +65,10 @@ impl Layout {
         let editor_body = editor_body_region.rect();
 
         let pad = theme.px(PAD);
-        let seg_h = theme.px(30.0);
-        let seg_w = theme.px(100.0);
-        let seg_y = toolbar[1] + (tb_h - seg_h) * 0.5;
-        let mut seg_flow = Flow::row(toolbar[0] + pad, seg_y, seg_h, 0.0);
+        let seg_h = theme.px(28.0);
+        let seg_w = theme.px(96.0);
+        let seg_y = titlebar[1] + (tb_h - seg_h) * 0.5;
+        let mut seg_flow = Flow::row(titlebar[0] + pad, seg_y, seg_h, 0.0);
         let seg = [
             seg_flow.take(seg_w),
             seg_flow.take(seg_w),
@@ -63,28 +77,43 @@ impl Layout {
         ];
         let seg_pill = rect_from(seg[0][0], seg_y, seg_w * 4.0, seg_h);
 
+        // Ribbon tab selector, centered in the title bar like Roblox's
+        // Home/Model/... strip but driving the ribbon row below.
+        let rtab_w = theme.px(88.0);
+        let rtabs_x0 = titlebar[0] + (titlebar[2] - rtab_w * 3.0) * 0.5;
+        let mut rtab_flow = Flow::row(rtabs_x0, seg_y, seg_h, 0.0);
+        let ribbon_tabs = [
+            rtab_flow.take(rtab_w),
+            rtab_flow.take(rtab_w),
+            rtab_flow.take(rtab_w),
+        ];
+
         let bw = theme.px(80.0);
         let btn_gap = theme.px(8.0);
-        let toolbar_right = toolbar[0] + toolbar[2];
-        let mut right_flow = Flow::row_from_right(toolbar_right - pad, seg_y, seg_h, btn_gap);
+        let titlebar_right = titlebar[0] + titlebar[2];
+        let mut right_flow = Flow::row_from_right(titlebar_right - pad, seg_y, seg_h, btn_gap);
         let btn_save = right_flow.take(bw);
-        let btn_editor = right_flow.take(bw);
         let btn_save_scene = right_flow.take(theme.px(110.0));
+        let btn_redo = right_flow.take(theme.px(64.0));
+        let btn_undo = right_flow.take(theme.px(64.0));
 
-        // seg_pill (left-anchored) and the save/editor/save-scene buttons
-        // (right-anchored) are two independent `Flow`s over one toolbar —
-        // not a single split chain — so an undersized toolbar can't be
-        // ruled out structurally; catch it explicitly instead of letting
-        // the buttons silently draw on top of each other.
+        // seg_pill (left-anchored), ribbon tabs (centered) and the save
+        // buttons (right-anchored) are three independent `Flow`s over one
+        // title bar — not a single split chain — so an undersized window
+        // can't be ruled out structurally; catch collisions explicitly
+        // instead of letting the buttons silently draw on top of each other.
         let mut guard = agate::OverlapGuard::new();
-        guard.claim("toolbar.seg_pill", seg_pill);
-        guard.claim("toolbar.btn_save_scene", btn_save_scene);
-        guard.claim("toolbar.btn_editor", btn_editor);
-        guard.claim("toolbar.btn_save", btn_save);
+        guard.claim("titlebar.seg_pill", seg_pill);
+        guard.claim_group("titlebar.ribbon_tabs", &ribbon_tabs);
+        guard.claim("titlebar.btn_save_scene", btn_save_scene);
+        guard.claim("titlebar.btn_save", btn_save);
+        guard.claim("titlebar.btn_redo", btn_redo);
+        guard.claim("titlebar.btn_undo", btn_undo);
 
         Self {
             window: rect_from(0.0, 0.0, win_w, win_h),
-            toolbar,
+            titlebar,
+            ribbon,
             navigator,
             inspector,
             statusbar,
@@ -93,9 +122,11 @@ impl Layout {
             editor_body,
             seg,
             seg_pill,
-            btn_editor,
+            ribbon_tabs,
             btn_save,
             btn_save_scene,
+            btn_undo,
+            btn_redo,
         }
     }
 
@@ -108,68 +139,41 @@ impl Layout {
         )
     }
 
-    pub const MODEL_TRAY_H: f32 = 120.0;
-    const MODEL_LIST_TOP_PAD: f32 = 26.0;
-    const MODEL_CHIP_W: f32 = 110.0;
-    const MODEL_CHIP_H: f32 = 40.0;
-    const MODEL_CHIP_GAP: f32 = 12.0;
-    const MODEL_PAD_X: f32 = 12.0;
-
-    pub fn model_tray(&self, theme: &Theme) -> Rect {
-        let gap = theme.px(PANEL_GAP);
-        let bar_h = theme.px(Self::MODEL_TRAY_H);
-        let (tray, _) = Region::new(self.center).split_bottom_gap(bar_h, gap);
-        tray
+    const RIBBON_CHIP_W: f32 = 110.0;
+    const RIBBON_CHIP_H: f32 = 38.0;
+    const RIBBON_CHIP_GAP: f32 = 10.0;
+    /// Y of the ribbon's control row (buttons/chips); the strip below it
+    /// holds the small group captions.
+    fn ribbon_row_y(&self, theme: &Theme) -> f32 {
+        self.ribbon[1] + theme.px(8.0)
     }
 
-    pub fn model_list_area(&self, theme: &Theme) -> Rect {
-        let tray = self.model_tray(theme);
-        let top_pad = theme.px(Self::MODEL_LIST_TOP_PAD);
-        let bottom_pad = theme.px(8.0);
-        let (_, rest) = Region::new(tray).split_top(top_pad);
-        let (_, list) = rest.split_bottom(bottom_pad);
-        list.rect()
+    /// Clip/content area for the Insert tab's horizontally scrolling chips.
+    pub fn ribbon_chip_area(&self, theme: &Theme) -> Rect {
+        let pad = theme.px(PAD);
+        rect_from(
+            self.ribbon[0] + pad,
+            self.ribbon_row_y(theme),
+            self.ribbon[2] - pad * 2.0,
+            theme.px(Self::RIBBON_CHIP_H),
+        )
     }
 
-    pub fn model_columns(&self, theme: &Theme) -> usize {
-        let tray = self.model_tray(theme);
-        let mw = theme.px(Self::MODEL_CHIP_W);
-        let gap = theme.px(Self::MODEL_CHIP_GAP);
-        let pad_x = theme.px(Self::MODEL_PAD_X);
-        let usable = (tray[2] - pad_x * 2.0 + gap).max(mw);
-        ((usable / (mw + gap)).floor() as usize).max(1)
-    }
-
-    pub fn model_rects(&self, theme: &Theme, count: usize, scroll_y: f32) -> Vec<Rect> {
-        let tray = self.model_tray(theme);
-        let list = self.model_list_area(theme);
-        let mw = theme.px(Self::MODEL_CHIP_W);
-        let mh = theme.px(Self::MODEL_CHIP_H);
-        let gap = theme.px(Self::MODEL_CHIP_GAP);
-        let pad_x = theme.px(Self::MODEL_PAD_X);
-        let cols = self.model_columns(theme);
+    pub fn ribbon_chip_rects(&self, theme: &Theme, count: usize, scroll_x: f32) -> Vec<Rect> {
+        let area = self.ribbon_chip_area(theme);
+        let cw = theme.px(Self::RIBBON_CHIP_W);
+        let gap = theme.px(Self::RIBBON_CHIP_GAP);
         (0..count)
-            .map(|i| {
-                let col = i % cols;
-                let row = i / cols;
-                let x = tray[0] + pad_x + col as f32 * (mw + gap);
-                let y = list[1] + row as f32 * (mh + gap) - scroll_y;
-                rect_from(x, y, mw, mh)
-            })
+            .map(|i| rect_from(area[0] + i as f32 * (cw + gap) - scroll_x, area[1], cw, area[3]))
             .collect()
     }
 
-    pub fn model_content_height(&self, theme: &Theme, count: usize) -> f32 {
-        let cols = self.model_columns(theme);
-        let rows = count.max(1).div_ceil(cols) as f32;
-        let mh = theme.px(Self::MODEL_CHIP_H);
-        let gap = theme.px(Self::MODEL_CHIP_GAP);
-        rows * mh + (rows - 1.0).max(0.0) * gap
-    }
-
-    pub fn model_max_scroll(&self, theme: &Theme, count: usize) -> f32 {
-        let list = self.model_list_area(theme);
-        (self.model_content_height(theme, count) - list[3]).max(0.0)
+    pub fn ribbon_chip_max_scroll(&self, theme: &Theme, count: usize) -> f32 {
+        let area = self.ribbon_chip_area(theme);
+        let cw = theme.px(Self::RIBBON_CHIP_W);
+        let gap = theme.px(Self::RIBBON_CHIP_GAP);
+        let content_w = count as f32 * cw + (count.max(1) - 1) as f32 * gap;
+        (content_w - area[2]).max(0.0)
     }
 
     pub fn gizmo_rects(&self, theme: &Theme) -> [Rect; 3] {
@@ -181,36 +185,31 @@ impl Layout {
         std::array::from_fn(|i| rect_from(x, y0 + i as f32 * (size + gap), size, size))
     }
 
-    pub fn mode_button_rects(&self, theme: &Theme) -> [Rect; 3] {
-        let w = theme.px(64.0);
+    pub fn tool_button_rects(&self, theme: &Theme) -> [Rect; 3] {
+        let w = theme.px(72.0);
         let h = theme.px(32.0);
         let gap = theme.px(6.0);
-        let pad = theme.px(14.0);
-        let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
-        let y = self.center[1] + pad;
-        let mut flow = Flow::row(x0, y, h, gap);
+        let x0 = self.ribbon[0] + theme.px(PAD);
+        let mut flow = Flow::row(x0, self.ribbon_row_y(theme), h, gap);
         [flow.take(w), flow.take(w), flow.take(w)]
     }
 
-    pub fn tool_button_rects(&self, theme: &Theme) -> [Rect; 3] {
-        let w = theme.px(64.0);
+    pub fn mode_button_rects(&self, theme: &Theme) -> [Rect; 3] {
+        let tools = self.tool_button_rects(theme);
+        let w = theme.px(72.0);
         let h = theme.px(32.0);
         let gap = theme.px(6.0);
-        let pad = theme.px(14.0);
-        let row_gap = theme.px(8.0);
-        let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
-        let y = self.center[1] + pad + h + row_gap;
-        let mut flow = Flow::row(x0, y, h, gap);
+        let x0 = tools[2][0] + tools[2][2] + theme.px(28.0);
+        let mut flow = Flow::row(x0, tools[0][1], h, gap);
         [flow.take(w), flow.take(w), flow.take(w)]
     }
 
     pub fn hand_toggle_rects(&self, theme: &Theme) -> [Rect; 2] {
-        let tools = self.tool_button_rects(theme);
-        let w = theme.px(32.0);
-        let h = tools[2][3];
+        let modes = self.mode_button_rects(theme);
+        let w = theme.px(36.0);
         let gap = theme.px(6.0);
-        let x0 = tools[2][0] + tools[2][2] + theme.px(16.0);
-        let mut flow = Flow::row(x0, tools[2][1], h, gap);
+        let x0 = modes[2][0] + modes[2][2] + theme.px(28.0);
+        let mut flow = Flow::row(x0, modes[0][1], modes[0][3], gap);
         [flow.take(w), flow.take(w)]
     }
 
@@ -283,18 +282,9 @@ impl Layout {
         };
         let col_row = rect_from(cx + rp, col_card[1] + hh + rp, cw - rp * 2.0, fh);
 
-        let btn_h = theme.px(30.0);
-        let btn_voxelize = guard.claim("inspector.btn_voxelize", col_flow.take(btn_h));
-        let btn_script = guard.claim("inspector.btn_script", col_flow.take(btn_h));
-        let btn_grab_pose = guard.claim("inspector.btn_grab_pose", col_flow.take(btn_h));
-        let btn_anim_sim = guard.claim("inspector.btn_anim_sim", col_flow.take(btn_h));
-        let btn_preview = guard.claim("inspector.btn_preview", col_flow.take(btn_h));
-
-        let act_y = btn_preview[1] + btn_h + cg;
-        let bw = (cw - theme.px(8.0)) * 0.5;
-        let mut act_flow = Flow::row(cx, act_y, btn_h, theme.px(8.0));
-        let btn_dup = guard.claim("inspector.btn_dup", act_flow.take(bw));
-        let btn_del = guard.claim("inspector.btn_del", act_flow.take(bw));
+        // Object actions (Voxelize, Duplicate, Delete, ...) live in the
+        // ribbon's Object tab now — the inspector is pure properties.
+        let bottom_y = col_flow.take(0.0)[1];
 
         InspectorCards {
             name_row,
@@ -310,14 +300,7 @@ impl Layout {
             light_rows,
             sound_card,
             sound_rows,
-            btn_voxelize,
-            btn_script,
-            btn_grab_pose,
-            btn_anim_sim,
-            btn_preview,
-            btn_dup,
-            btn_del,
-            bottom_y: act_y + btn_h,
+            bottom_y,
         }
     }
 
@@ -342,12 +325,5 @@ pub(crate) struct InspectorCards {
     pub light_rows: [Rect; 5],
     pub sound_card: Rect,
     pub sound_rows: [Rect; 7],
-    pub btn_voxelize: Rect,
-    pub btn_script: Rect,
-    pub btn_grab_pose: Rect,
-    pub btn_anim_sim: Rect,
-    pub btn_preview: Rect,
-    pub btn_dup: Rect,
-    pub btn_del: Rect,
     pub bottom_y: f32,
 }

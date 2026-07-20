@@ -4,6 +4,7 @@ pub(crate) mod grab_pose_panel;
 pub(crate) mod inspector;
 pub(crate) mod navigator;
 pub(crate) mod object_preview_panel;
+pub(crate) mod ribbon;
 pub(crate) mod scene;
 pub(crate) mod statusbar;
 pub(crate) mod toolbar;
@@ -255,17 +256,32 @@ impl super::App {
         let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         for rm in &render_meshes {
-            if let Some((mesh, _)) = self.mesh_cache.get_mut(&rm.path) {
+            if !self.instance_models.contains_key(&rm.id) {
+                self.instance_models
+                    .insert(rm.id.clone(), renderer.create_model_uniform());
+            }
+        }
+        self.instance_models
+            .retain(|id, _| render_meshes.iter().any(|rm| &rm.id == id));
+
+        // Cheap clone — the GPU vertex/index/texture handles are shared, so this
+        // only gives each object its own transform to pair with its own uniform.
+        let instance_meshes: Vec<(&str, GltfMesh)> = render_meshes
+            .iter()
+            .filter_map(|rm| {
+                let (mesh, _) = self.mesh_cache.get(&rm.path)?;
+                let mut mesh = mesh.clone();
                 mesh.position = rm.position;
                 mesh.rotation = rm.rotation;
                 mesh.scale = rm.scale;
-            }
-        }
+                Some((rm.id.as_str(), mesh))
+            })
+            .collect();
 
-        let mut mesh_instances: Vec<MeshInstance> = render_meshes
+        let mut mesh_instances: Vec<MeshInstance> = instance_meshes
             .iter()
-            .filter_map(|rm| {
-                let (mesh, model) = self.mesh_cache.get(&rm.path)?;
+            .filter_map(|(id, mesh)| {
+                let model = self.instance_models.get(*id)?;
                 Some(MeshInstance { mesh, model })
             })
             .collect();
@@ -350,6 +366,11 @@ impl super::App {
             ui.card_border(layout.center);
         }
 
+        let has_selection = self
+            .selected_object
+            .as_ref()
+            .map(|id| self.runtime.scene().find_object(id).is_some())
+            .unwrap_or(false);
         toolbar::draw(
             ui,
             &theme,
@@ -358,8 +379,8 @@ impl super::App {
             &mut self.edit_camera,
             self.last_world_head,
             &mut self.editing,
-            self.selected_file,
-            &self.editor,
+            &mut self.ribbon_tab,
+            has_selection,
         );
         if toolbar::draw_save(ui, &theme, &layout, &self.editing, self.editor.dirty) {
             let _ = self.editor.save();
@@ -372,6 +393,46 @@ impl super::App {
             ) {
                 log::info!("space_soup_editor: saved scene to {}", path.display());
                 self.scene_dirty = false;
+            }
+        }
+        let (undo_clicked, redo_clicked) = toolbar::draw_undo_redo(
+            ui,
+            &theme,
+            &layout,
+            !self.undo_stack.is_empty(),
+            !self.redo_stack.is_empty(),
+        );
+        // Inlined (not a `&mut self` method) because `renderer`/`ui` hold live
+        // borrows of `self` across this whole draw; disjoint field access is
+        // allowed but a whole-`self` method call is not. Swapping the current
+        // scene onto the opposite stack makes undo/redo mutually reversible.
+        if undo_clicked {
+            if let Some(prev) = self.undo_stack.pop() {
+                let current = self.runtime.scene().clone();
+                self.redo_stack.push(current);
+                *self.runtime.scene_mut() = prev;
+                self.scene_dirty = true;
+                self.undo_coalescing = false;
+                if let Some(sel) = self.selected_object.clone() {
+                    if self.runtime.scene().find_object(&sel).is_none() {
+                        self.selected_object = None;
+                    }
+                }
+                self.inspector_rot_edit = None;
+            }
+        } else if redo_clicked {
+            if let Some(next) = self.redo_stack.pop() {
+                let current = self.runtime.scene().clone();
+                self.undo_stack.push(current);
+                *self.runtime.scene_mut() = next;
+                self.scene_dirty = true;
+                self.undo_coalescing = false;
+                if let Some(sel) = self.selected_object.clone() {
+                    if self.runtime.scene().find_object(&sel).is_none() {
+                        self.selected_object = None;
+                    }
+                }
+                self.inspector_rot_edit = None;
             }
         }
 
@@ -390,20 +451,19 @@ impl super::App {
             &packet,
         );
 
+        // Document tabs above the viewport: "Scene" plus a closable tab for
+        // whichever file is open. Clicking Scene (or the file tab's x) closes
+        // the editor — same state transition the old Editor toggle made.
+        if self.editing.is_some() || self.view_mode == ViewMode::Edit {
+            let (back_to_scene, close_file) =
+                draw_doc_tabs(ui, &theme, &layout, &self.editing, &self.editor);
+            if back_to_scene || close_file {
+                self.editing = None;
+            }
+        }
+
         if self.editing.is_some() {
-            let title = match &self.editing {
-                Some(EditTarget::SceneFile) => self.editor.file_name(),
-                Some(EditTarget::ObjectScript(id)) => format!("Script: {id}"),
-                None => String::new(),
-            };
-            draw_editor_tab(
-                ui,
-                &theme,
-                &layout,
-                &mut self.editor,
-                &mut self.editor_focused,
-                &title,
-            );
+            draw_editor_body(ui, &layout, &mut self.editor, &mut self.editor_focused);
 
             if let Some(EditTarget::ObjectScript(id)) = self.editing.clone() {
                 if self.editor.dirty {
@@ -417,39 +477,27 @@ impl super::App {
                 }
             }
         } else if self.view_mode == ViewMode::Edit {
-            let (new_mode, new_tool, new_hand) = viewport_overlay::draw(
-                ui,
-                &theme,
-                &layout,
-                &self.available_models,
-                &self.dragging_new_object,
-                &mut self.model_scroll_y,
-                self.gizmo_drag,
-                self.xform_gizmo.mode,
-                self.tool,
-                self.snap_hand,
-            );
-            if let Some(new_mode) = new_mode {
-                self.xform_gizmo.mode = new_mode;
-            }
-            if let Some(new_tool) = new_tool {
-                if new_tool != self.tool {
-                    self.rig_selection.clear();
-                    self.snap_selected_joint = None;
-                    self.tool = new_tool;
-                }
-            }
-            if let Some(new_hand) = new_hand {
-                self.snap_hand = new_hand;
-            }
+            viewport_overlay::draw(ui, &theme, &layout, self.gizmo_drag);
         }
 
-        let mut scene_dirty = self.scene_dirty;
+        // Snapshot before inspector edits so this frame's change is undoable.
+        // Only meaningful when the object cards are showing (not the file
+        // editor), so skip the clone otherwise.
+        let scene_before = if self.editing.is_none() {
+            Some(self.runtime.scene().clone())
+        } else {
+            None
+        };
+        // Fresh per-frame signal: the inspector only ever sets this true, so
+        // starting from false tells us whether an edit happened *this frame*
+        // (unlike the persistent `self.scene_dirty`).
+        let mut scene_dirty = false;
         let mut open_script_editor: Option<String> = None;
         let mut open_grab_pose_editor: Option<String> = None;
         let mut open_anim_sim_editor: Option<String> = None;
         let mut open_object_preview: Option<String> = None;
         let mut preview_sound: Option<(String, f32, f32)> = None;
+        let mut teleport_to: Option<String> = None;
         let game_dir_for_inspector = self.runtime.game_dir().to_path_buf();
         inspector::draw(
             ui,
@@ -458,20 +506,159 @@ impl super::App {
             &self.editing,
             &self.editor,
             self.runtime.scene_mut(),
-            &game_dir_for_inspector,
             &mut self.selected_object,
             &mut scene_dirty,
-            &mut open_script_editor,
-            &mut open_grab_pose_editor,
-            &mut open_anim_sim_editor,
-            &mut open_object_preview,
-            &mut preview_sound,
             &mut self.inspector_content_height,
             self.view_mode == ViewMode::Edit,
             &mut self.inspector_rot_edit,
             &packet,
         );
-        self.scene_dirty = scene_dirty;
+
+        // The ribbon's scene-mutating Object actions run below, inside the
+        // same undo-capture window as the inspector's field edits.
+        let selection_info = if self.editing.is_none() {
+            self.selected_object.as_ref().and_then(|id| {
+                self.runtime.scene().find_object(id).map(|o| ribbon::SelectionInfo {
+                    id: id.clone(),
+                    has_mesh: o.mesh.is_some(),
+                    has_sound: o.sound.is_some(),
+                    has_script: o.script.is_some(),
+                })
+            })
+        } else {
+            None
+        };
+        let rr = ribbon::draw(
+            ui,
+            &theme,
+            &layout,
+            self.ribbon_tab,
+            self.xform_gizmo.mode,
+            self.tool,
+            self.snap_hand,
+            &self.available_models,
+            &self.dragging_new_object,
+            &mut self.model_scroll_y,
+            selection_info,
+        );
+        if let Some(new_mode) = rr.mode {
+            self.xform_gizmo.mode = new_mode;
+        }
+        if let Some(new_tool) = rr.tool {
+            if new_tool != self.tool {
+                self.rig_selection.clear();
+                self.snap_selected_joint = None;
+                self.tool = new_tool;
+            }
+        }
+        if let Some(new_hand) = rr.hand {
+            self.snap_hand = new_hand;
+        }
+        if let Some(sel_id) = self
+            .selected_object
+            .clone()
+            .filter(|id| self.runtime.scene().find_object(id).is_some())
+        {
+            let acts = rr.actions;
+            if acts.voxelize {
+                match crate::app::scene_bridge::voxelize_object(
+                    self.runtime.scene_mut(),
+                    &game_dir_for_inspector,
+                    &sel_id,
+                ) {
+                    Ok(new_id) => {
+                        self.selected_object = Some(new_id);
+                        scene_dirty = true;
+                    }
+                    Err(e) => log::warn!("space_soup_editor: voxelize '{sel_id}' failed: {e}"),
+                }
+            }
+            if acts.sound_preview {
+                if let Some(sound) = self
+                    .runtime
+                    .scene()
+                    .find_object(&sel_id)
+                    .and_then(|o| o.sound.clone())
+                {
+                    preview_sound = Some((sound.clip, sound.volume, sound.pitch));
+                }
+            }
+            if acts.script {
+                let has_script = self
+                    .runtime
+                    .scene()
+                    .find_object(&sel_id)
+                    .map(|o| o.script.is_some())
+                    .unwrap_or(false);
+                if !has_script {
+                    if let Some(obj) = self.runtime.scene_mut().find_object_mut(&sel_id) {
+                        obj.script = Some(inspector::default_script_stub(&sel_id));
+                        scene_dirty = true;
+                    }
+                }
+                open_script_editor = Some(sel_id.clone());
+            }
+            if acts.grab_pose {
+                open_grab_pose_editor = Some(sel_id.clone());
+            }
+            if acts.anim_sim {
+                open_anim_sim_editor = Some(sel_id.clone());
+            }
+            if acts.preview {
+                open_object_preview = Some(sel_id.clone());
+            }
+            if acts.teleport {
+                teleport_to = Some(sel_id.clone());
+            }
+            if acts.duplicate {
+                let scene = self.runtime.scene_mut();
+                if let Some(src) = scene.find_object(&sel_id).cloned() {
+                    let mut copy = src;
+                    copy.id = inspector::unique_id(scene, &sel_id);
+                    copy.cuboid.position += glam::Vec3::new(0.1, 0.0, 0.1);
+                    let new_id = copy.id.clone();
+                    scene.objects.push(copy);
+                    self.selected_object = Some(new_id);
+                    scene_dirty = true;
+                }
+            }
+            if acts.delete {
+                self.runtime.scene_mut().objects.retain(|o| o.id != sel_id);
+                self.selected_object = None;
+                scene_dirty = true;
+            }
+        }
+
+        if scene_dirty {
+            self.scene_dirty = true;
+            if let Some(before) = scene_before {
+                // A drag holds across many frames; capture the pre-drag state
+                // once and suppress the rest until the drag releases.
+                if !self.undo_coalescing {
+                    const UNDO_LIMIT: usize = 100;
+                    self.undo_stack.push(before);
+                    if self.undo_stack.len() > UNDO_LIMIT {
+                        self.undo_stack.remove(0);
+                    }
+                    self.redo_stack.clear();
+                    if ui.is_dragging() {
+                        self.undo_coalescing = true;
+                    }
+                }
+            }
+        }
+        if !ui.is_dragging() {
+            self.undo_coalescing = false;
+        }
+
+        if let Some(id) = teleport_to {
+            if let Some(obj) = self.runtime.scene().find_object(&id) {
+                // Frame the whole object, not just its centre — half_size is the
+                // fitted bounds, so its length is the radius that must fit in view.
+                let radius = obj.cuboid.half_size.length().max(0.1);
+                self.edit_camera.focus_on(obj.cuboid.position, radius);
+            }
+        }
         if let Some((clip, volume, pitch)) = preview_sound {
             self.runtime.preview_sound(&clip, volume, pitch);
         }
@@ -1248,37 +1435,78 @@ fn draw_preview_header(
     (done_clicked, clicked_mode)
 }
 
-fn draw_editor_tab(
+/// The document-tab strip above the viewport: a fixed "Scene" tab plus a
+/// closable tab for the open file, Roblox-style. Returns
+/// `(scene_tab_clicked_while_editing, close_clicked)` — both mean "close the
+/// text editor" to the caller, kept separate for readability there.
+fn draw_doc_tabs(
     ui: &mut agate::Ui,
     theme: &Theme,
     layout: &Layout,
-    editor: &mut agate::TextEditor,
-    editor_focused: &mut bool,
-    title_override: &str,
-) {
+    editing: &Option<EditTarget>,
+    editor: &agate::TextEditor,
+) -> (bool, bool) {
     use agate::theme as t;
 
-    ui.fill(layout.editor_tab, t::TOOLBAR_BG);
-    ui.separator(
-        layout.editor_tab[0],
-        layout.editor_tab[1] + layout.editor_tab[3] - theme.px(1.0),
-        layout.editor_tab[2],
-    );
-    let dot = if editor.dirty { "\u{25cf}  " } else { "" };
-    let title = format!("{dot}{title_override}");
-    ui.label_styled(
-        layout.editor_tab[0] + theme.px(super::layout::PAD),
-        layout.editor_tab[1] + (layout.editor_tab[3] - theme.body()) * 0.5,
-        &title,
-        theme.body(),
-        t::TEXT_PRIMARY,
-        layout.editor_tab[2],
-        Some(layout.editor_tab),
-    );
+    let bar = layout.editor_tab;
+    ui.fill(bar, t::TOOLBAR_BG);
+    ui.separator(bar[0], bar[1] + bar[3] - theme.px(1.0), bar[2]);
 
+    let tab_h = bar[3] - theme.px(4.0);
+    let tab_y = bar[1] + theme.px(2.0);
+    let mut flow = agate::Flow::row(bar[0] + theme.px(6.0), tab_y, tab_h, theme.px(6.0));
+
+    let scene_active = editing.is_none();
+    let scene_r = flow.take(theme.px(80.0));
+    let (bg, fg) = if scene_active {
+        (t::CONTROL_BG, t::TEXT_PRIMARY)
+    } else {
+        (t::TOOLBAR_BG, t::TEXT_SECONDARY)
+    };
+    let scene_clicked = ui.button_styled(scene_r, "Scene", bg, fg);
+
+    let mut close_clicked = false;
+    if let Some(target) = editing {
+        let label = match target {
+            EditTarget::SceneFile => editor.file_name(),
+            EditTarget::ObjectScript(id) => format!("Script: {id}"),
+        };
+        let dot = if editor.dirty { "\u{25cf} " } else { "" };
+        let text = format!("{dot}{label}");
+
+        let tab_r = flow.take(theme.px(200.0));
+        ui.panel(tab_r, t::CONTROL_BG);
+        ui.label_styled(
+            tab_r[0] + theme.px(8.0),
+            tab_r[1] + (tab_r[3] - theme.small()) * 0.5,
+            &text,
+            theme.small(),
+            t::TEXT_PRIMARY,
+            tab_r[2] - theme.px(32.0),
+            Some(tab_r),
+        );
+        let close_sz = theme.px(18.0);
+        let close_r = [
+            tab_r[0] + tab_r[2] - close_sz - theme.px(3.0),
+            tab_r[1] + (tab_r[3] - close_sz) * 0.5,
+            close_sz,
+            close_sz,
+        ];
+        close_clicked = ui.button_styled(close_r, "x", t::CONTROL_BG, t::TEXT_SECONDARY);
+        ui.tooltip(close_r, "Close (changes stay in the buffer until saved)");
+    }
+
+    (scene_clicked && !scene_active, close_clicked)
+}
+
+fn draw_editor_body(
+    ui: &mut agate::Ui,
+    layout: &Layout,
+    editor: &mut agate::TextEditor,
+    editor_focused: &mut bool,
+) {
     let focused = *editor_focused;
-    let er = layout.editor_body;
-    let clicked = ui.text_editor(er, editor, focused);
+    let clicked = ui.text_editor(layout.editor_body, editor, focused);
     if clicked {
         *editor_focused = true;
     }

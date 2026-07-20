@@ -20,20 +20,14 @@ pub(crate) fn draw(
     editing: &Option<EditTarget>,
     editor: &TextEditor,
     scene: &mut Scene,
-    game_dir: &std::path::Path,
     selected_object: &mut Option<String>,
     scene_dirty: &mut bool,
-    open_script_editor: &mut Option<String>,
-    open_grab_pose_editor: &mut Option<String>,
-    open_anim_sim_editor: &mut Option<String>,
-    open_object_preview: &mut Option<String>,
-    preview_sound: &mut Option<(String, f32, f32)>,
     content_height: &mut f32,
     editable: bool,
     rot_edit: &mut Option<(String, [f32; 3])>,
     _packet: &space_soup_engine::DebugPacket,
 ) {
-    ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+    ui.panel_bordered_flat(layout.inspector, t::SIDEBAR_BG);
 
     let ix = layout.inspector[0];
     let iy = layout.inspector[1];
@@ -80,17 +74,10 @@ pub(crate) fn draw(
                 body_top - scroll_y,
                 clip_ins,
                 scene,
-                game_dir,
                 &id,
-                selected_object,
                 scene_dirty,
-                open_script_editor,
-                open_grab_pose_editor,
-                open_anim_sim_editor,
                 editable,
                 rot_edit,
-                open_object_preview,
-                preview_sound,
             );
             let ch = (bottom_y + scroll_y) - iy + theme.px(12.0);
             ui.end_scroll_area(scroll_id, layout.inspector, ch);
@@ -183,17 +170,10 @@ fn draw_object_cards(
     body_top: f32,
     clip_ins: [f32; 4],
     scene: &mut Scene,
-    game_dir: &std::path::Path,
     id: &str,
-    selected_object: &mut Option<String>,
     scene_dirty: &mut bool,
-    open_script_editor: &mut Option<String>,
-    open_grab_pose_editor: &mut Option<String>,
-    open_anim_sim_editor: &mut Option<String>,
     editable: bool,
     rot_edit: &mut Option<(String, [f32; 3])>,
-    open_object_preview: &mut Option<String>,
-    preview_sound: &mut Option<(String, f32, f32)>,
 ) -> f32 {
     let (has_light, has_sound) = {
         let obj = scene.find_object(id).unwrap();
@@ -201,15 +181,13 @@ fn draw_object_cards(
     };
     let cards = layout.inspector_cards(theme, body_top, has_light, has_sound);
 
-    let (obj_position, obj_half_size, obj_rotation, obj_color, has_script, has_mesh) = {
+    let (obj_position, obj_half_size, obj_rotation, obj_color) = {
         let obj = scene.find_object(id).unwrap();
         (
             obj.cuboid.position,
             obj.cuboid.half_size,
             obj.cuboid.rotation,
             obj.cuboid.color,
-            obj.script.is_some(),
-            obj.mesh.is_some(),
         )
     };
 
@@ -407,64 +385,6 @@ fn draw_object_cards(
             cards.col_row,
             Color(obj_color.0, obj_color.1, obj_color.2, 255),
         );
-    }
-
-    if has_mesh && ui.button_secondary(cards.btn_voxelize, "Voxelize") {
-        match super::super::scene_bridge::voxelize_object(scene, game_dir, id) {
-            Ok(new_id) => {
-                *selected_object = Some(new_id);
-                *scene_dirty = true;
-            }
-            Err(e) => log::warn!("space_soup_editor: voxelize '{id}' failed: {e}"),
-        }
-    } else if has_sound && ui.button_secondary(cards.btn_voxelize, "Play Preview") {
-        if let Some(sound) = scene.find_object(id).and_then(|o| o.sound.clone()) {
-            *preview_sound = Some((sound.clip, sound.volume, sound.pitch));
-        }
-    }
-
-    let script_label = if has_script {
-        "Edit Script"
-    } else {
-        "Add Script"
-    };
-    if ui.button_secondary(cards.btn_script, script_label) {
-        if !has_script {
-            if let Some(obj) = scene.find_object_mut(id) {
-                obj.script = Some(default_script_stub(id));
-                *scene_dirty = true;
-            }
-        }
-        *open_script_editor = Some(id.to_string());
-    }
-
-    if ui.button_secondary(cards.btn_grab_pose, "Edit Grab Pose") {
-        *open_grab_pose_editor = Some(id.to_string());
-    }
-
-    if ui.button_secondary(cards.btn_anim_sim, "Simulate Animations") {
-        *open_anim_sim_editor = Some(id.to_string());
-    }
-
-    if ui.button_secondary(cards.btn_preview, "Preview") {
-        *open_object_preview = Some(id.to_string());
-    }
-
-    if ui.button_secondary(cards.btn_dup, "Duplicate") {
-        if let Some(src) = scene.find_object(id).cloned() {
-            let mut copy = src;
-            copy.id = unique_id(scene, id);
-            copy.cuboid.position += glam::Vec3::new(0.1, 0.0, 0.1);
-            let new_id = copy.id.clone();
-            scene.objects.push(copy);
-            *selected_object = Some(new_id);
-            *scene_dirty = true;
-        }
-    }
-    if ui.button_danger(cards.btn_del, "Delete") {
-        scene.objects.retain(|o| o.id != id);
-        *selected_object = None;
-        *scene_dirty = true;
     }
 
     let hint_y = cards.bottom_y + theme.px(14.0);
@@ -738,11 +658,11 @@ fn draw_sound_card(
     }
 }
 
-fn default_script_stub(id: &str) -> String {
+pub(crate) fn default_script_stub(id: &str) -> String {
     format!("// Script for '{id}'\n\nfn on_update(dt) {{\n}}\n")
 }
 
-fn unique_id(scene: &Scene, base: &str) -> String {
+pub(crate) fn unique_id(scene: &Scene, base: &str) -> String {
     let stem = base.trim_end_matches(|c: char| c.is_ascii_digit() || c == '_');
     let stem = if stem.is_empty() { base } else { stem };
     let mut n = 2;

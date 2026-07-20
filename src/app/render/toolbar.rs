@@ -1,10 +1,9 @@
 use agate::theme as t;
-use agate::TextEditor;
 use agate::{Theme, Ui};
 
 use super::super::edit_camera::EditCamera;
 use super::super::layout::Layout;
-use super::super::{EditTarget, ViewMode};
+use super::super::{EditTarget, RibbonTab, ViewMode};
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw(
@@ -15,12 +14,10 @@ pub(crate) fn draw(
     edit_camera: &mut EditCamera,
     last_world_head: glam::Vec3,
     editing: &mut Option<EditTarget>,
-    selected_file: Option<usize>,
-    _editor: &TextEditor,
+    ribbon_tab: &mut RibbonTab,
+    has_selection: bool,
 ) {
-    ui.panel_bordered(layout.toolbar, t::TITLEBAR_BG);
-
-    let is_file_editor = matches!(editing, Some(EditTarget::SceneFile));
+    ui.panel_bordered_flat(layout.titlebar, t::TITLEBAR_BG);
 
     ui.panel(layout.seg_pill, t::CONTROL_ACTIVE);
 
@@ -53,20 +50,49 @@ pub(crate) fn draw(
         ui.separator_v(seg[0] + seg[2], seg[1] + inset, seg[3] - inset * 2.0);
     }
 
-    let (ed_bg, ed_fg) = if is_file_editor {
-        (t::ACCENT, t::TEXT_ON_ACCENT)
-    } else {
-        (t::CONTROL_BG, t::TEXT_PRIMARY)
-    };
-    if ui.button_styled(layout.btn_editor, "Editor", ed_bg, ed_fg) {
-        *editing = if is_file_editor {
-            None
-        } else if selected_file.is_some() {
-            Some(EditTarget::SceneFile)
+    // Ribbon tab selector — which page the ribbon row below shows. The
+    // Object tab stays clickable with nothing selected (the ribbon explains
+    // itself there), but its label dims as a hint.
+    let rtab_labels = ["Build", "Insert", "Object"];
+    let rtabs = [RibbonTab::Build, RibbonTab::Insert, RibbonTab::Object];
+    for i in 0..3 {
+        let active = *ribbon_tab == rtabs[i];
+        let dim = rtabs[i] == RibbonTab::Object && !has_selection;
+        let (bg, fg) = if active {
+            (t::ACCENT, t::TEXT_ON_ACCENT)
+        } else if dim {
+            (t::TITLEBAR_BG, t::TEXT_SECONDARY)
         } else {
-            None
+            (t::TITLEBAR_BG, t::TEXT_PRIMARY)
         };
+        if ui.button_styled(layout.ribbon_tabs[i], rtab_labels[i], bg, fg) {
+            *ribbon_tab = rtabs[i];
+        }
     }
+}
+
+/// Undo/redo pair for inspector edits. Returns `(undo_clicked, redo_clicked)`.
+/// Each button dims when its stack is empty, matching the Save buttons' style.
+pub(crate) fn draw_undo_redo(
+    ui: &mut Ui,
+    theme: &Theme,
+    layout: &Layout,
+    can_undo: bool,
+    can_redo: bool,
+) -> (bool, bool) {
+    let _ = theme;
+    let style = |enabled: bool| {
+        if enabled {
+            (t::CONTROL_BG, t::TEXT_PRIMARY)
+        } else {
+            (t::CONTROL_BG, t::TEXT_SECONDARY)
+        }
+    };
+    let (u_bg, u_fg) = style(can_undo);
+    let (r_bg, r_fg) = style(can_redo);
+    let undo = ui.button_styled(layout.btn_undo, "Undo", u_bg, u_fg) && can_undo;
+    let redo = ui.button_styled(layout.btn_redo, "Redo", r_bg, r_fg) && can_redo;
+    (undo, redo)
 }
 
 pub(crate) fn draw_save(
