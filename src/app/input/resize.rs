@@ -15,6 +15,11 @@ pub(crate) fn scale_factor_changed(app: &mut App, scale_factor: f32) {
 }
 
 pub(crate) fn resized(app: &mut App, size: PhysicalSize<u32>) {
+    // A minimized window reports 0x0; skip — `Surface::configure` panics on
+    // zero dimensions. The next non-zero resize restores it.
+    if size.width == 0 || size.height == 0 {
+        return;
+    }
     if let (Some(sur), Some(cfg), Some(rnd), Some(ov)) = (
         app.surface.as_ref(),
         app.config.as_mut(),

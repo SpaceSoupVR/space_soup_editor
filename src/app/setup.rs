@@ -42,14 +42,21 @@ impl App {
         }))
         .unwrap();
 
+        // On Windows the window can report a 0x0 physical size at `resumed`
+        // before it is first shown; `Surface::configure` panics on zero
+        // dimensions (and the camera aspect would divide by zero). Clamp to at
+        // least 1x1 — winit's `Resized` event reconfigures to the real size a
+        // frame later.
         let size = window.inner_size();
+        let width = size.width.max(1);
+        let height = size.height.max(1);
         let caps = surface.get_capabilities(&adapter);
         let fmt = caps.formats[0];
         let cfg = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: fmt,
-            width: size.width,
-            height: size.height,
+            width,
+            height,
             present_mode: PresentMode::Fifo,
             alpha_mode: caps.alpha_modes[0],
             view_formats: vec![],
@@ -57,9 +64,9 @@ impl App {
         };
         surface.configure(&device, &cfg);
 
-        self.camera = Camera::new(size.width as f32 / size.height as f32);
-        let renderer = Renderer::from_device(device, queue, fmt, size.width, size.height);
-        let overlay = Overlay::new(&renderer.device, fmt, size.width, size.height, self.scale);
+        self.camera = Camera::new(width as f32 / height as f32);
+        let renderer = Renderer::from_device(device, queue, fmt, width, height);
+        let overlay = Overlay::new(&renderer.device, fmt, width, height, self.scale);
 
         let font = Arc::new(load_font());
         let ui = Ui::new(self.scale, font);

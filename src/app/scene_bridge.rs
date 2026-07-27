@@ -12,6 +12,7 @@ pub(crate) fn to_render_light(l: &RenderLight) -> renderer::Light {
         kind: match l.kind {
             space_soup_engine::LightKind::Point => renderer::LightKind::Point,
             space_soup_engine::LightKind::Spot => renderer::LightKind::Spot,
+            space_soup_engine::LightKind::Directional => renderer::LightKind::Directional,
         },
         color: renderer::Color3(l.color.0, l.color.1, l.color.2, l.color.3),
         intensity: l.intensity,

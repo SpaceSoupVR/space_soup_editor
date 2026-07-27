@@ -558,14 +558,18 @@ fn draw_light_card(
 
     let label_w = theme.px(56.0);
 
-    let kind_idx = matches!(light.kind, LightKind::Spot) as usize;
-    if let Some(new_idx) = ui.tabs(cards.light_rows[0], kind_idx, &["Point", "Spot"]) {
+    let kind_idx = match light.kind {
+        LightKind::Point => 0,
+        LightKind::Spot => 1,
+        LightKind::Directional => 2,
+    };
+    if let Some(new_idx) = ui.tabs(cards.light_rows[0], kind_idx, &["Point", "Spot", "Sun"]) {
         if let Some(obj) = scene.find_object_mut(id) {
             if let Some(l) = obj.light.as_mut() {
-                l.kind = if new_idx == 1 {
-                    LightKind::Spot
-                } else {
-                    LightKind::Point
+                l.kind = match new_idx {
+                    1 => LightKind::Spot,
+                    2 => LightKind::Directional,
+                    _ => LightKind::Point,
                 };
                 *scene_dirty = true;
             }
