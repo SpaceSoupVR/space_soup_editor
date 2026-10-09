@@ -6,7 +6,7 @@ use super::super::layout::{Layout, PAD, ROW_H};
 use super::super::nav::{NavGroup, NavRow};
 use super::super::EditTarget;
 
-const FOOTER_H: f32 = 90.0;
+const FOOTER_H: f32 = 44.0;
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn draw(
@@ -23,7 +23,7 @@ pub(crate) fn draw(
     nav_objects_open: &mut bool,
     packet: &DebugPacket,
 ) -> Option<usize> {
-    ui.panel_bordered(layout.navigator, t::SIDEBAR_BG);
+    ui.panel_docked(layout.navigator, t::SIDEBAR_BG, agate::DockEdge::Right);
 
     let nav = layout.navigator;
     let footer_h = theme.px(FOOTER_H);
@@ -61,16 +61,49 @@ pub(crate) fn draw(
                     NavGroup::Scenes => *nav_scenes_open,
                     NavGroup::Objects => *nav_objects_open,
                 };
-                let label = match group {
-                    NavGroup::Scenes => "Scenes",
-                    NavGroup::Objects => "Objects",
+                let (label, count) = match group {
+                    NavGroup::Scenes => ("SCENES", files_discovered.len()),
+                    NavGroup::Objects => ("OBJECTS", objects.len()),
                 };
 
-                ui.fill(r, t::SURFACE);
-                let new_open = ui.disclosure(r, open, label);
-                match group {
-                    NavGroup::Scenes => *nav_scenes_open = new_open,
-                    NavGroup::Objects => *nav_objects_open = new_open,
+                // Finder-style section header: chevron + small-caps label +
+                // count, no fill.
+                let chevron = if open { "\u{25be}" } else { "\u{25b8}" };
+                let cy = r[1] + (r[3] - theme.small()) * 0.5;
+                ui.label_styled(
+                    r[0] + theme.px(4.0),
+                    cy,
+                    chevron,
+                    theme.small(),
+                    t::TEXT_DISABLED,
+                    theme.px(16.0),
+                    Some(rows_area),
+                );
+                ui.label_styled(
+                    r[0] + theme.px(20.0),
+                    cy,
+                    label,
+                    theme.small(),
+                    t::TEXT_SECONDARY,
+                    r[2] - theme.px(52.0),
+                    Some(rows_area),
+                );
+                let count_txt = count.to_string();
+                ui.label_styled(
+                    r[0] + r[2] - theme.px(28.0),
+                    cy,
+                    &count_txt,
+                    theme.small(),
+                    t::TEXT_DISABLED,
+                    theme.px(28.0),
+                    Some(rows_area),
+                );
+
+                if ui.clicked(r) {
+                    match group {
+                        NavGroup::Scenes => *nav_scenes_open = !open,
+                        NavGroup::Objects => *nav_objects_open = !open,
+                    }
                 }
             }
             NavRow::SceneFile { file_index } => {
@@ -81,7 +114,7 @@ pub(crate) fn draw(
                     .unwrap_or_default();
                 let sel = *selected_file == Some(*file_index) && is_file_editor;
 
-                let ir = [r[0] + theme.px(20.0), r[1], r[2] - theme.px(20.0), r[3]];
+                let ir = [r[0] + theme.px(12.0), r[1], r[2] - theme.px(12.0), r[3]];
                 if ui.list_row_clipped(ir, &name, sel, Some(rows_area)) {
                     clicked_nav = Some(*file_index);
                 }
@@ -90,7 +123,7 @@ pub(crate) fn draw(
                 let sel =
                     selected_object.as_deref() == Some(object_id.as_str()) && editing.is_none();
 
-                let ir = [r[0] + theme.px(28.0), r[1], r[2] - theme.px(28.0), r[3]];
+                let ir = [r[0] + theme.px(12.0), r[1], r[2] - theme.px(12.0), r[3]];
                 if ui.list_row_clipped(ir, object_id, sel, Some(rows_area)) {
                     *editing = None;
                     *selected_object = Some(object_id.clone());
@@ -102,7 +135,7 @@ pub(crate) fn draw(
                     NavGroup::Objects => "No objects placed",
                 };
                 ui.label_styled(
-                    r[0] + theme.px(28.0),
+                    r[0] + theme.px(24.0),
                     r[1] + (r[3] - theme.small()) * 0.5,
                     hint,
                     theme.small(),
@@ -116,32 +149,32 @@ pub(crate) fn draw(
 
     ui.end_scroll_area(scroll_id, rows_area, content_h);
 
+    // Slim footer: scene name and render stats on two quiet lines.
     let nx = nav[0];
     let nw = nav[2];
     let clip_nav = [nx, footer_y, nw, footer_h];
-
+    ui.separator(nx + theme.px(PAD), footer_y, nw - theme.px(PAD * 2.0));
     ui.label_styled(
         nx + theme.px(PAD),
         footer_y + theme.px(8.0),
-        "SCENE",
+        &packet.scene.scene_name,
         theme.small(),
         t::TEXT_SECONDARY,
-        nw,
-        None,
+        nw - theme.px(PAD * 2.0),
+        Some(clip_nav),
     );
     let info = format!(
-        "{}\nobjects: {}\ncuboids: {}\nmeshes:  {}",
-        packet.scene.scene_name,
+        "{} objects \u{b7} {} cuboids \u{b7} {} meshes",
         objects.len(),
         packet.scene.render_cuboids,
         packet.scene.render_meshes,
     );
     ui.label_styled(
         nx + theme.px(PAD),
-        footer_y + theme.px(8.0 + ROW_H),
+        footer_y + theme.px(24.0),
         &info,
         theme.small(),
-        t::TEXT_PRIMARY,
+        t::TEXT_DISABLED,
         nw - theme.px(PAD * 2.0),
         Some(clip_nav),
     );

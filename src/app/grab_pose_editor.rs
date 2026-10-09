@@ -52,6 +52,10 @@ fn default_grip_point(existing: &[GripPointDef], hand: Hand) -> GripPointDef {
         hand_offset_scale: one_vec3_arr(),
         finger_curl: HashMap::new(),
         grab_range: None,
+        hand_offset_pos: None,
+        hand_offset_rot: None,
+        finger_pose: None,
+        part: None,
     }
 }
 
@@ -507,13 +511,13 @@ pub(crate) fn collect_mesh_instances<'a>(
 
     if let Some(mesh_ref) = &obj.mesh {
         if let Some((mesh, model)) = mesh_cache.get(&mesh_ref.path) {
-            out.push(MeshInstance { mesh, model });
+            out.push(MeshInstance { mesh, model, lightmap_key: None });
         }
     }
 
     if let Some(point) = visible_active_point(state, scene) {
         if let Some((mesh, model)) = mesh_cache.get(&hand_cache_key(point.hand)) {
-            out.push(MeshInstance { mesh, model });
+            out.push(MeshInstance { mesh, model, lightmap_key: None });
         }
     }
     out

@@ -15,7 +15,7 @@ pub(crate) fn draw(
     frame_count: u64,
     tool_hint: Option<&str>,
 ) {
-    ui.panel_bordered(layout.statusbar, t::STATUSBAR_BG);
+    ui.panel_docked(layout.statusbar, t::STATUSBAR_BG, agate::DockEdge::Top);
     let sb = layout.statusbar;
     let sy = sb[1] + (sb[3] - theme.small()) * 0.5;
 

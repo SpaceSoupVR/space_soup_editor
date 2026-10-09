@@ -50,14 +50,14 @@ impl EditCamera {
     }
 
     pub fn look(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx * 0.006;
+        self.yaw -= dx * 0.0025;
 
-        self.pitch = (self.pitch - dy * 0.006).clamp(-1.55, 1.55);
+        self.pitch = (self.pitch - dy * 0.0025).clamp(-1.55, 1.55);
     }
 
     pub fn pan(&mut self, dx: f32, dy: f32) {
         let right = self.right();
-        let speed = 0.012 * self.speed_scale();
+        let speed = 0.005 * self.speed_scale();
 
         self.position += right * dx * speed - Vec3::Y * dy * speed;
     }

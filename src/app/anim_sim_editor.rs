@@ -226,6 +226,7 @@ fn capture_keyframe(obj: &GameObject, t: f32) -> Keyframe {
         rotation: Some(obj.cuboid.rotation),
         scale: Some(obj.cuboid.half_size),
         color: None,
+        easing: None,
     }
 }
 
@@ -716,6 +717,7 @@ pub(crate) fn add_key_at_playhead(app: &mut App) {
             rotation: baked.rotation.or(Some(obj.cuboid.rotation)),
             scale: baked.scale.or(Some(obj.cuboid.half_size)),
             color: None,
+            easing: None,
         };
         let follow = key.clone();
         anim.keyframes.push(key);
@@ -979,7 +981,7 @@ pub(crate) fn collect_mesh_instances<'a>(
     };
     if let Some(mesh_ref) = &obj.mesh {
         if let Some((mesh, model)) = mesh_cache.get(&mesh_ref.path) {
-            out.push(MeshInstance { mesh, model });
+            out.push(MeshInstance { mesh, model, lightmap_key: None });
         }
     }
     out

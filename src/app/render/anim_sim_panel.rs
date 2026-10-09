@@ -146,7 +146,7 @@ pub(crate) fn draw(
     // widgets underneath would still take clicks).
     if state.confirm_exit {
         draw_top_bar(ui);
-        ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+        ui.panel_docked(layout.inspector, t::SIDEBAR_BG, agate::DockEdge::Left);
         match draw_exit_confirm(ui, theme, layout) {
             Some(ExitChoice::Exit) => actions.exit_discard = true,
             Some(ExitChoice::SaveExit) => actions.exit_save = true,
@@ -214,7 +214,7 @@ pub(crate) fn draw(
     );
 
     // -- Panel scaffolding ----------------------------------------------------
-    ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+    ui.panel_docked(layout.inspector, t::SIDEBAR_BG, agate::DockEdge::Left);
     let ix = layout.inspector[0];
     let iw = layout.inspector[2];
     let pad = theme.px(PAD);

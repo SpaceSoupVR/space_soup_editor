@@ -315,6 +315,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "avatar_ik"
+version = "0.1.0"
+dependencies = [
+ "glam 0.29.3",
+ "log",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "avif-serialize"
 version = "0.8.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3020,12 +3030,14 @@ dependencies = [
  "log",
  "ndk 0.7.0",
  "ndk-glue",
+ "objc2 0.5.2",
+ "objc2-app-kit",
+ "objc2-foundation 0.2.2",
  "openxr",
  "pollster",
  "serde",
  "serde_json",
  "wgpu",
- "winit",
 ]
 
 [[package]]
@@ -3051,6 +3063,7 @@ name = "space_soup_engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "avatar_ik",
  "glam 0.29.3",
  "gltf",
  "kira",
@@ -3068,6 +3081,7 @@ dependencies = [
 name = "space_soup_protocol"
 version = "0.1.0"
 dependencies = [
+ "avatar_ik",
  "serde",
  "serde_json",
  "uuid",

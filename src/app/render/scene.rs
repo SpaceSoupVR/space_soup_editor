@@ -12,7 +12,6 @@ use space_soup_engine::{DebugPacket, GameObject, RenderCuboid};
 use crate::scene_3d;
 use crate::transform_gizmo::{GizmoAssets, TransformGizmo};
 
-use super::super::ViewMode;
 
 pub(crate) const GIZMO_ANCHOR_MARGIN: f32 = 0.35;
 
@@ -30,7 +29,6 @@ pub(crate) fn build_cuboids(
     to_world: impl Fn(Vec3, Quat) -> (Vec3, Quat),
     objects: &[GameObject],
     selected_id: Option<&str>,
-    is_edit: bool,
     dragging_new_model: bool,
     ghost_preview: Option<Vec3>,
 ) -> Vec<Cuboid> {
@@ -47,7 +45,7 @@ pub(crate) fn build_cuboids(
         to_world,
     ));
 
-    if is_edit {
+    {
         for obj in objects {
             if obj.hidden {
                 continue;
@@ -103,7 +101,7 @@ pub(crate) fn collect_icon_instances<'a>(
     // created hidden precisely so the icon is their only visible body.
     let mut seen: std::collections::HashSet<&str> = std::collections::HashSet::new();
     for obj in objects {
-        let kind = if obj.light.is_some() {
+        let kind = if !obj.lights.is_empty() {
             IconKind::Light
         } else if obj.sound.is_some() {
             IconKind::Sound
@@ -122,7 +120,7 @@ pub(crate) fn collect_icon_instances<'a>(
 
     icon_mesh_cache
         .values()
-        .map(|(mesh, model)| MeshInstance { mesh, model })
+        .map(|(mesh, model)| MeshInstance { mesh, model, lightmap_key: None })
         .collect()
 }
 
@@ -134,11 +132,10 @@ pub(crate) fn sync_gizmo_and_collect<'a>(
     viewport: (f32, f32),
     objects: &[GameObject],
     selected_id: Option<&str>,
-    view_mode: ViewMode,
     show_editor: bool,
     is_dragging: bool,
 ) -> Vec<MeshInstance<'a>> {
-    if view_mode != ViewMode::Edit || show_editor {
+    if show_editor {
         return Vec::new();
     }
     let Some(id) = selected_id else {

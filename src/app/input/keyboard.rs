@@ -6,7 +6,7 @@ use super::super::discover::winit_key_to_agate;
 use super::super::grab_pose_editor;
 use super::super::object_preview;
 use super::super::snap;
-use super::super::{App, EditorTool, ViewMode};
+use super::super::{App, EditorTool};
 use crate::transform_gizmo::GizmoMode;
 
 /// Entry point for every key press *and release*. In the base-editor viewport
@@ -39,8 +39,7 @@ pub(crate) fn handle_key_event(app: &mut App, event: &KeyEvent) {
 fn fly_active(app: &App) -> bool {
     let typing = app.editing.is_some()
         || app.ui.as_ref().map(|u| u.text_focused()).unwrap_or(false);
-    app.view_mode == ViewMode::Edit
-        && app.grab_pose_editor.is_none()
+    app.grab_pose_editor.is_none()
         && app.anim_sim_editor.is_none()
         && !typing
 }

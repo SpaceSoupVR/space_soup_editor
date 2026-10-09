@@ -48,7 +48,7 @@ impl TransformGizmo {
             .filter_map(|&axis| {
                 let state = self.state_for(axis);
                 let (gltf, model) = assets.parts.get(&(self.mode, axis, state))?;
-                Some(MeshInstance { mesh: gltf, model })
+                Some(MeshInstance { mesh: gltf, model, lightmap_key: None })
             })
             .collect()
     }

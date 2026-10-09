@@ -9,9 +9,9 @@ use crate::transform_gizmo::{Axis, GizmoMode};
 use super::super::layout::{in_rect, Layout};
 use super::super::picking::ray_plane_intersect;
 use super::super::render::scene::GIZMO_ANCHOR_MARGIN;
-use super::super::scene_bridge::{mesh_base_half_size, new_object, unique_id};
+use super::super::scene_bridge::{mesh_base_half_size_of, new_object, unique_id};
 use super::super::snap::{self, snap_rotation, snap_vec3};
-use super::super::{App, EditorTool, GizmoPart, NewObjectSource, ViewMode, PRIMITIVE_PALETTE_COUNT};
+use super::super::{App, EditorTool, GizmoPart, NewObjectSource, PRIMITIVE_PALETTE_COUNT};
 
 fn has_gizmo_target(app: &App) -> bool {
     match app.tool {
@@ -50,8 +50,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
         && !in_rect(new, layout.navigator)
         && !in_rect(new, layout.inspector);
 
-    if app.view_mode == ViewMode::Edit
-        && app.editing.is_none()
+    if app.editing.is_none()
         && has_gizmo_target(app)
         && !app.gizmo_dragging
         && over_viewport
@@ -63,7 +62,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
         app.xform_gizmo.hovered_axis = None;
     }
 
-    if app.left_down && app.view_mode == ViewMode::Edit && app.editing.is_none() {
+    if app.left_down && app.editing.is_none() {
         if app.gizmo_dragging {
             app.xform_gizmo.drag(mouse_vec2, &app.camera, viewport);
             if app.tool == EditorTool::Snap {
@@ -76,7 +75,7 @@ pub(crate) fn cursor_moved(app: &mut App, position: PhysicalPosition<f64>) {
             match part {
                 GizmoPart::Orbit => app.edit_camera.look(dx, dy),
                 GizmoPart::Pan => app.edit_camera.pan(dx, dy),
-                GizmoPart::Zoom => app.edit_camera.dolly(-dy * 0.004),
+                GizmoPart::Zoom => app.edit_camera.dolly(-dy * 0.0018),
             }
             app.dragged = true;
         } else if app.moving_object {
@@ -139,7 +138,7 @@ fn apply_gizmo_drag_to_selected_object(app: &mut App) {
             if let Some(&cached) = app.mesh_base_half_size.get(path) {
                 Some(cached)
             } else if let Some((gltf, _)) = app.mesh_cache.get(path) {
-                let computed = mesh_base_half_size(gltf);
+                let computed = mesh_base_half_size_of(gltf);
                 app.mesh_base_half_size.insert(path.clone(), computed);
                 Some(computed)
             } else {
@@ -356,6 +355,16 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
 
     match state {
         ElementState::Pressed => {
+            // Empty toolbar glass doubles as the window drag region — the
+            // native titlebar is transparent, so the OS offers none.
+            if in_rect(mp, layout.toolbar)
+                && !layout.toolbar_controls().iter().any(|r| in_rect(mp, *r))
+            {
+                if let Some(w) = &app.window {
+                    let _ = w.drag_window();
+                }
+                return;
+            }
             app.left_down = true;
             app.dragged = false;
             app.moving_object = false;
@@ -369,7 +378,7 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                 || in_rect(mp, layout.navigator)
                 || in_rect(mp, layout.inspector);
 
-            if app.view_mode == ViewMode::Edit && app.editing.is_none() {
+            if app.editing.is_none() {
                 let mp2 = Vec2::new(mp.0, mp.1);
 
                 let model_list_area = layout.model_list_area(&theme);
@@ -526,8 +535,7 @@ pub(crate) fn left_button(app: &mut App, state: ElementState) {
                 app.moving_object = false;
             }
 
-            if app.view_mode == ViewMode::Edit
-                && app.editing.is_none()
+            if app.editing.is_none()
                 && app.tool == EditorTool::Select
                 && !app.dragged
                 && !was_moving
@@ -580,7 +588,7 @@ fn place_dropped_light(app: &mut App, pos: Vec3) {
     let half = Vec3::splat(0.1);
     let mut obj = new_object(id.clone(), Vec3::new(pos.x, half.y + 0.5, pos.z), half, None);
     obj.hidden = true;
-    obj.light = Some(space_soup_engine::LightDef::default());
+    obj.lights = vec![space_soup_engine::LightDef::default()];
     scene.objects.push(obj);
     app.selected_object = Some(id);
     app.scene_dirty = true;

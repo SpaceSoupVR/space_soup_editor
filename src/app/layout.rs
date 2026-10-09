@@ -3,15 +3,19 @@ use agate::{rect_from, Flow, Region};
 
 pub(crate) use agate::{in_rect, Rect};
 
-pub(crate) const TOOLBAR_H: f32 = 56.0;
+pub(crate) const TOOLBAR_H: f32 = 48.0;
 pub(crate) const STATUSBAR_H: f32 = 28.0;
 pub(crate) const NAVIGATOR_W: f32 = 256.0;
 pub(crate) const INSPECTOR_W: f32 = 300.0;
 pub(crate) const TAB_BAR_H: f32 = 28.0;
 pub(crate) const ROW_H: f32 = 30.0;
 pub(crate) const PAD: f32 = 12.0;
-pub(crate) const PANEL_GAP: f32 = 12.0;
-pub(crate) const WINDOW_MARGIN: f32 = 16.0;
+/// Logical height of the native macOS titlebar strip (traffic lights, drag
+/// area). The content view extends under it, so every layout starts below.
+#[cfg(target_os = "macos")]
+pub(crate) const NATIVE_TITLEBAR_H: f32 = space_soup::renderer::MACOS_TITLEBAR_PT;
+#[cfg(not(target_os = "macos"))]
+pub(crate) const NATIVE_TITLEBAR_H: f32 = 0.0;
 
 pub(crate) struct Layout {
     pub window: Rect,
@@ -22,8 +26,6 @@ pub(crate) struct Layout {
     pub center: Rect,
     pub editor_tab: Rect,
     pub editor_body: Rect,
-    pub seg: [Rect; 4],
-    pub seg_pill: Rect,
     pub btn_editor: Rect,
     pub btn_save: Rect,
     pub btn_save_scene: Rect,
@@ -36,43 +38,32 @@ impl Layout {
         let nav_w = theme.px(NAVIGATOR_W);
         let ins_w = theme.px(INSPECTOR_W);
         let tab_h = theme.px(TAB_BAR_H);
-        let margin = theme.px(WINDOW_MARGIN);
-        let gap = theme.px(PANEL_GAP);
-
-        let window = Region::new(rect_from(0.0, 0.0, win_w, win_h)).inset(margin);
-        let (toolbar, rest) = window.split_top_gap(tb_h, gap);
-        let (statusbar, rest) = rest.split_bottom_gap(sb_h, gap);
-        let (navigator, rest) = rest.split_left_gap(nav_w, gap);
-        let (inspector, center_region) = rest.split_right_gap(ins_w, gap);
+        // Docked chrome: panels sit flush against the window edges below the
+        // native titlebar strip — nothing floats, hairlines separate regions.
+        let strip = theme.px(NATIVE_TITLEBAR_H);
+        let window = Region::new(rect_from(0.0, strip, win_w, win_h - strip));
+        let (toolbar, rest) = window.split_top(tb_h);
+        let (statusbar, rest) = rest.split_bottom(sb_h);
+        let (navigator, rest) = rest.split_left(nav_w);
+        let (inspector, center_region) = rest.split_right(ins_w);
         let center = center_region.rect();
 
         let (editor_tab, editor_body_region) = Region::new(center).split_top(tab_h);
         let editor_body = editor_body_region.rect();
 
         let pad = theme.px(PAD);
-        let seg_h = theme.px(30.0);
-        let seg_w = theme.px(100.0);
-        let seg_y = toolbar[1] + (tb_h - seg_h) * 0.5;
-        let mut seg_flow = Flow::row(toolbar[0] + pad, seg_y, seg_h, 0.0);
-        let seg = [
-            seg_flow.take(seg_w),
-            seg_flow.take(seg_w),
-            seg_flow.take(seg_w),
-            seg_flow.take(seg_w),
-        ];
-        let seg_pill = rect_from(seg[0][0], seg_y, seg_w * 4.0, seg_h);
+        let btn_h = theme.px(30.0);
+        let btn_y = toolbar[1] + (tb_h - btn_h) * 0.5;
 
         let bw = theme.px(80.0);
         let btn_gap = theme.px(8.0);
         let toolbar_right = toolbar[0] + toolbar[2];
-        let mut right_flow = Flow::row_from_right(toolbar_right - pad, seg_y, seg_h, btn_gap);
+        let mut right_flow = Flow::row_from_right(toolbar_right - pad, btn_y, btn_h, btn_gap);
         let btn_save = right_flow.take(bw);
         let btn_editor = right_flow.take(bw);
         let btn_save_scene = right_flow.take(theme.px(110.0));
 
-
         let mut guard = agate::OverlapGuard::new();
-        guard.claim("toolbar.seg_pill", seg_pill);
         guard.claim("toolbar.btn_save_scene", btn_save_scene);
         guard.claim("toolbar.btn_editor", btn_editor);
         guard.claim("toolbar.btn_save", btn_save);
@@ -86,12 +77,17 @@ impl Layout {
             center,
             editor_tab,
             editor_body,
-            seg,
-            seg_pill,
             btn_editor,
             btn_save,
             btn_save_scene,
         }
+    }
+
+    /// Every interactive rect in the toolbar. Anything else on the toolbar is
+    /// empty glass, which doubles as the window drag region (the native
+    /// titlebar is transparent/hidden).
+    pub fn toolbar_controls(&self) -> [Rect; 3] {
+        [self.btn_editor, self.btn_save, self.btn_save_scene]
     }
 
     pub fn grab_pose_viewport(&self) -> Rect {
@@ -111,9 +107,8 @@ impl Layout {
     const MODEL_PAD_X: f32 = 12.0;
 
     pub fn model_tray(&self, theme: &Theme) -> Rect {
-        let gap = theme.px(PANEL_GAP);
         let bar_h = theme.px(Self::MODEL_TRAY_H);
-        let (tray, _) = Region::new(self.center).split_bottom_gap(bar_h, gap);
+        let (tray, _) = Region::new(self.center).split_bottom(bar_h);
         tray
     }
 
@@ -181,7 +176,7 @@ impl Layout {
         let h = theme.px(32.0);
         let gap = theme.px(6.0);
         let pad = theme.px(14.0);
-        let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
+        let x0 = self.navigator[0] + self.navigator[2] + pad;
         let y = self.center[1] + pad;
         let mut flow = Flow::row(x0, y, h, gap);
         [flow.take(w), flow.take(w), flow.take(w)]
@@ -193,7 +188,7 @@ impl Layout {
         let gap = theme.px(6.0);
         let pad = theme.px(14.0);
         let row_gap = theme.px(8.0);
-        let x0 = self.navigator[0] + self.navigator[2] + theme.px(PANEL_GAP) + pad;
+        let x0 = self.navigator[0] + self.navigator[2] + pad;
         let y = self.center[1] + pad + h + row_gap;
         let mut flow = Flow::row(x0, y, h, gap);
         [flow.take(w), flow.take(w), flow.take(w)]

@@ -31,8 +31,8 @@ impl OrbitCamera {
     }
 
     pub fn orbit(&mut self, dx: f32, dy: f32) {
-        self.yaw -= dx * 0.006;
-        self.pitch = (self.pitch - dy * 0.006).clamp(-1.55, 1.55);
+        self.yaw -= dx * 0.0025;
+        self.pitch = (self.pitch - dy * 0.0025).clamp(-1.55, 1.55);
     }
 
     pub fn pan(&mut self, dx: f32, dy: f32) {

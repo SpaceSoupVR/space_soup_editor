@@ -159,7 +159,7 @@ pub(crate) fn collect_mesh_instances<'a>(
         return Vec::new();
     };
     match mesh_cache.get(&mesh_ref.path) {
-        Some((mesh, model)) => vec![MeshInstance { mesh, model }],
+        Some((mesh, model)) => vec![MeshInstance { mesh, model, lightmap_key: None }],
         None => Vec::new(),
     }
 }

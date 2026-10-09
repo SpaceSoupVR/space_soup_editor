@@ -36,14 +36,6 @@ use discover::{discover_json, discover_models, game_dir};
 use edit_camera::EditCamera;
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(crate) enum ViewMode {
-    PlayerView,
-    FirstPerson,
-    RenderView,
-    Edit,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
 pub(crate) enum GizmoPart {
     Orbit,
     Pan,
@@ -106,7 +98,6 @@ pub(crate) struct App {
     pub(crate) icon_assets: Option<IconAssets>,
     pub(crate) icon_mesh_cache: HashMap<String, (GltfMesh, ModelUniform)>,
 
-    pub(crate) view_mode: ViewMode,
     pub(crate) edit_camera: EditCamera,
     pub(crate) last_world_head: glam::Vec3,
 
@@ -200,7 +191,6 @@ impl App {
             icon_assets: None,
             icon_mesh_cache: HashMap::new(),
 
-            view_mode: ViewMode::PlayerView,
             edit_camera: EditCamera::new(glam::Vec3::new(0.0, 1.2, 0.0)),
             last_world_head: glam::Vec3::new(0.0, 1.2, 0.0),
 
@@ -268,5 +258,33 @@ impl App {
         if let Some(w) = &self.window {
             w.request_redraw();
         }
+    }
+
+    /// Drains this frame's accumulated input events into a `UiInput`. Call
+    /// before borrowing the renderer/surface/ui for the frame.
+    pub(crate) fn take_ui_input(&mut self, dt: f32) -> agate::UiInput {
+        agate::UiInput {
+            mouse_pos: self.mouse_pos,
+            mouse_held: std::mem::take(&mut self.mouse_held),
+            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
+            mouse_released: std::mem::take(&mut self.mouse_released),
+            scroll_y: std::mem::take(&mut self.scroll_y),
+            text: std::mem::take(&mut self.text_input),
+            keys: std::mem::take(&mut self.named_keys),
+            cmd: self.mods.super_key() || self.mods.control_key(),
+            shift: self.mods.shift_key(),
+            alt: self.mods.alt_key(),
+            dt,
+        }
+    }
+
+    /// `take_ui_input` drained `mouse_held`, so re-seed it for the next frame
+    /// while the button is still physically down.
+    pub(crate) fn reseed_mouse_held(&mut self) {
+        self.mouse_held = if self.left_down {
+            vec![AMouseButton::Left]
+        } else {
+            vec![]
+        };
     }
 }

@@ -28,7 +28,7 @@ pub(crate) fn draw(
 ) -> ObjectPreviewPanelActions {
     let mut actions = ObjectPreviewPanelActions::default();
 
-    ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+    ui.panel_docked(layout.inspector, t::SIDEBAR_BG, agate::DockEdge::Left);
     let ix = layout.inspector[0];
     let iw = layout.inspector[2];
     let pad = theme.px(PAD);

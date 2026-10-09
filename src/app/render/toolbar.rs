@@ -1,57 +1,38 @@
 use agate::theme as t;
-use agate::TextEditor;
 use agate::{Theme, Ui};
 
-use super::super::edit_camera::EditCamera;
-use super::super::layout::Layout;
-use super::super::{EditTarget, ViewMode};
+use super::super::layout::{Layout, PAD};
+use super::super::EditTarget;
 
-#[allow(clippy::too_many_arguments)]
 pub(crate) fn draw(
     ui: &mut Ui,
     theme: &Theme,
     layout: &Layout,
-    view_mode: &mut ViewMode,
-    edit_camera: &mut EditCamera,
-    last_world_head: glam::Vec3,
     editing: &mut Option<EditTarget>,
     selected_file: Option<usize>,
-    _editor: &TextEditor,
+    scene_name: &str,
+    scene_dirty: bool,
 ) {
-    ui.panel_bordered(layout.toolbar, t::TITLEBAR_BG);
+    super::header_backdrop(ui, theme, layout);
+
+    // Scene identity on the left, like a document title.
+    let title = if scene_dirty {
+        format!("{scene_name} \u{2022} edited")
+    } else {
+        scene_name.to_string()
+    };
+    let ty = layout.toolbar[1] + (layout.toolbar[3] - theme.body()) * 0.5;
+    ui.label_styled(
+        layout.toolbar[0] + theme.px(PAD + 4.0),
+        ty,
+        &title,
+        theme.body(),
+        t::TEXT_SECONDARY,
+        (layout.btn_save_scene[0] - layout.toolbar[0] - theme.px(PAD * 2.0)).max(0.0),
+        Some(layout.toolbar),
+    );
 
     let is_file_editor = matches!(editing, Some(EditTarget::SceneFile));
-
-    ui.panel(layout.seg_pill, t::CONTROL_ACTIVE);
-
-    let seg_labels = ["Player", "First Person", "Render View", "Edit"];
-    let seg_modes = [
-        ViewMode::PlayerView,
-        ViewMode::FirstPerson,
-        ViewMode::RenderView,
-        ViewMode::Edit,
-    ];
-    for i in 0..4 {
-        let active = *view_mode == seg_modes[i] && editing.is_none();
-        let (bg, fg) = if active {
-            (t::CONTROL_BG, t::TEXT_PRIMARY)
-        } else {
-            (t::CONTROL_ACTIVE, t::TEXT_SECONDARY)
-        };
-        if ui.button_styled(layout.seg[i], seg_labels[i], bg, fg) {
-            *view_mode = seg_modes[i];
-            if *view_mode == ViewMode::Edit {
-                *edit_camera = EditCamera::new(last_world_head);
-            }
-            *editing = None;
-        }
-    }
-
-    for i in 0..3 {
-        let seg = layout.seg[i];
-        let inset = theme.px(6.0);
-        ui.separator_v(seg[0] + seg[2], seg[1] + inset, seg[3] - inset * 2.0);
-    }
 
     let (ed_bg, ed_fg) = if is_file_editor {
         (t::ACCENT, t::TEXT_ON_ACCENT)
@@ -78,17 +59,12 @@ pub(crate) fn draw_save(
 ) -> bool {
     let _ = theme;
     let save_en = matches!(editing, Some(EditTarget::SceneFile)) && dirty;
-    let save_bg = if save_en {
-        t::CONTROL_HOVER
+    if save_en {
+        ui.button_styled(layout.btn_save, "Save", t::ACCENT, t::TEXT_ON_ACCENT)
     } else {
-        t::CONTROL_BG
-    };
-    let save_fg = if save_en {
-        t::TEXT_PRIMARY
-    } else {
-        t::TEXT_SECONDARY
-    };
-    ui.button_styled(layout.btn_save, "Save", save_bg, save_fg) && save_en
+        ui.button_disabled(layout.btn_save, "Save", t::CONTROL_BG, t::TEXT_DISABLED);
+        false
+    }
 }
 
 pub(crate) fn draw_save_scene(
@@ -98,15 +74,15 @@ pub(crate) fn draw_save_scene(
     scene_dirty: bool,
 ) -> bool {
     let _ = theme;
-    let bg = if scene_dirty {
-        t::SUCCESS
+    if scene_dirty {
+        ui.button_styled(layout.btn_save_scene, "Save Scene", t::ACCENT, t::TEXT_ON_ACCENT)
     } else {
-        t::CONTROL_BG
-    };
-    let fg = if scene_dirty {
-        t::TEXT_ON_ACCENT
-    } else {
-        t::TEXT_SECONDARY
-    };
-    ui.button_styled(layout.btn_save_scene, "Save Scene", bg, fg) && scene_dirty
+        ui.button_disabled(
+            layout.btn_save_scene,
+            "Save Scene",
+            t::CONTROL_BG,
+            t::TEXT_DISABLED,
+        );
+        false
+    }
 }

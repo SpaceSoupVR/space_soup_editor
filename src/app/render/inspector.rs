@@ -37,7 +37,7 @@ pub(crate) fn draw(
         (space_soup::renderer::GltfMesh, space_soup::renderer::mesh_pipeline::ModelUniform),
     >,
 ) {
-    ui.panel_bordered(layout.inspector, t::SIDEBAR_BG);
+    ui.panel_docked(layout.inspector, t::SIDEBAR_BG, agate::DockEdge::Left);
 
     let ix = layout.inspector[0];
     let iy = layout.inspector[1];
@@ -206,7 +206,7 @@ fn draw_object_cards(
 ) -> f32 {
     let (has_light, has_sound) = {
         let obj = scene.find_object(id).unwrap();
-        (obj.light.is_some(), obj.sound.is_some())
+        (!obj.lights.is_empty(), obj.sound.is_some())
     };
 
     let (obj_position, obj_half_size, obj_rotation, has_script, has_mesh, mesh_path, anim_names) = {
@@ -252,25 +252,7 @@ fn draw_object_cards(
     let axes = ["X", "Y", "Z"];
     let hdr_h = theme.px(22.0);
 
-    ui.separator(cards.pos_card[0], cards.pos_card[1], cards.pos_card[2]);
-    ui.fill(
-        [
-            cards.pos_card[0],
-            cards.pos_card[1],
-            cards.pos_card[2],
-            hdr_h,
-        ],
-        t::SURFACE,
-    );
-    ui.label_styled(
-        cards.pos_card[0] + theme.px(PAD),
-        cards.pos_card[1] + theme.px(5.0),
-        "POSITION",
-        theme.small(),
-        t::TEXT_SECONDARY,
-        cards.pos_card[2],
-        None,
-    );
+    draw_card_header(ui, theme, cards.pos_card, hdr_h, "POSITION");
     let pos_vals = [obj_position.x, obj_position.y, obj_position.z];
     for i in 0..3usize {
         let (label_r, input_r) = split_row(cards.pos_rows[i], label_w, field_gap);
@@ -303,20 +285,7 @@ fn draw_object_cards(
     }
 
     if !has_light && !has_sound {
-        ui.separator(cards.sz_card[0], cards.sz_card[1], cards.sz_card[2]);
-        ui.fill(
-            [cards.sz_card[0], cards.sz_card[1], cards.sz_card[2], hdr_h],
-            t::SURFACE,
-        );
-        ui.label_styled(
-            cards.sz_card[0] + theme.px(PAD),
-            cards.sz_card[1] + theme.px(5.0),
-            "SIZE",
-            theme.small(),
-            t::TEXT_SECONDARY,
-            cards.sz_card[2],
-            None,
-        );
+        draw_card_header(ui, theme, cards.sz_card, hdr_h, "SIZE");
         let sz_vals = [
             obj_half_size.x * 2.0,
             obj_half_size.y * 2.0,
@@ -358,25 +327,7 @@ fn draw_object_cards(
         draw_sound_card(ui, theme, &cards, id, scene, scene_dirty);
     }
 
-    ui.separator(cards.rot_card[0], cards.rot_card[1], cards.rot_card[2]);
-    ui.fill(
-        [
-            cards.rot_card[0],
-            cards.rot_card[1],
-            cards.rot_card[2],
-            hdr_h,
-        ],
-        t::SURFACE,
-    );
-    ui.label_styled(
-        cards.rot_card[0] + theme.px(PAD),
-        cards.rot_card[1] + theme.px(5.0),
-        "ROTATION",
-        theme.small(),
-        t::TEXT_SECONDARY,
-        cards.rot_card[2],
-        None,
-    );
+    draw_card_header(ui, theme, cards.rot_card, hdr_h, "ROTATION");
     // Axis-indexed [X, Y, Z]; glam's YXZ decomposition returns (Y, X, Z).
     // While a drag is in progress the sticky `rot_edit` euler is shown/edited
     // instead of a fresh decompose, which would collapse Y and Z together near
@@ -542,12 +493,13 @@ fn draw_readonly_value(ui: &mut Ui, theme: &Theme, r: [f32; 4], text: &str, clip
     );
 }
 
+/// Rounded grouped card with a small-caps title — Apple inspector style.
 fn draw_card_header(ui: &mut Ui, theme: &Theme, card: [f32; 4], hdr_h: f32, title: &str) {
-    ui.separator(card[0], card[1], card[2]);
-    ui.fill([card[0], card[1], card[2], hdr_h], t::SURFACE);
+    let _ = hdr_h;
+    ui.panel(card, t::SURFACE);
     ui.label_styled(
         card[0] + theme.px(PAD),
-        card[1] + theme.px(5.0),
+        card[1] + theme.px(6.0),
         title,
         theme.small(),
         t::TEXT_SECONDARY,
@@ -596,7 +548,7 @@ fn draw_light_card(
 
     let light = scene
         .find_object(id)
-        .and_then(|o| o.light.clone())
+        .and_then(|o| o.lights.first().cloned())
         .unwrap_or_default();
 
     let label_w = theme.px(56.0);
@@ -604,7 +556,7 @@ fn draw_light_card(
     let kind_idx = matches!(light.kind, LightKind::Spot) as usize;
     if let Some(new_idx) = ui.tabs(cards.light_rows[0], kind_idx, &["Point", "Spot"]) {
         if let Some(obj) = scene.find_object_mut(id) {
-            if let Some(l) = obj.light.as_mut() {
+            if let Some(l) = obj.lights.first_mut() {
                 l.kind = if new_idx == 1 {
                     LightKind::Spot
                 } else {
@@ -619,7 +571,7 @@ fn draw_light_card(
         ui, theme, cards.light_rows[1], "Intens.", label_w, id, light.intensity, 2,
     ) {
         if v >= 0.0 {
-            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.lights.first_mut()) {
                 l.intensity = v;
                 *scene_dirty = true;
             }
@@ -630,7 +582,7 @@ fn draw_light_card(
         ui, theme, cards.light_rows[2], "Range", label_w, id, light.range, 2,
     ) {
         if v > 0.0 {
-            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.lights.first_mut()) {
                 l.range = v;
                 *scene_dirty = true;
             }
@@ -641,7 +593,7 @@ fn draw_light_card(
         ui, theme, cards.light_rows[3], "Cone\u{b0}", label_w, id, light.cone_angle_deg, 1,
     ) {
         if v > 0.0 && v <= 180.0 {
-            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.light.as_mut()) {
+            if let Some(l) = scene.find_object_mut(id).and_then(|o| o.lights.first_mut()) {
                 l.cone_angle_deg = v;
                 *scene_dirty = true;
             }

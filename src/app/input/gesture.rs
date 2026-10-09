@@ -1,7 +1,7 @@
 use winit::event::{MouseScrollDelta, TouchPhase};
 
 use super::super::layout::{in_rect, Layout};
-use super::super::{App, ViewMode};
+use super::super::App;
 use agate::Theme;
 
 pub(crate) fn pinch(app: &mut App, delta: f64, phase: TouchPhase) {
@@ -30,8 +30,8 @@ pub(crate) fn pinch(app: &mut App, delta: f64, phase: TouchPhase) {
             }
             app.redraw_now();
         }
-    } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_viewport(app) {
-        app.edit_camera.dolly(delta as f32 * 0.8);
+    } else if app.editing.is_none() && over_viewport(app) {
+        app.edit_camera.dolly(delta as f32 * 0.35);
         app.redraw_now();
     }
 }
@@ -77,15 +77,15 @@ pub(crate) fn mouse_wheel(app: &mut App, delta: MouseScrollDelta) {
                 }
             }
         }
-    } else if app.view_mode == ViewMode::Edit && app.editing.is_none() && over_model_tray(app) {
+    } else if app.editing.is_none() && over_model_tray(app) {
         let (win_w, win_h) = app.win_size();
         let theme = Theme::new(app.scale);
         let layout = Layout::new(win_w, win_h, &theme);
         let max_scroll = layout.model_max_scroll(&theme, app.available_models.len());
         app.model_scroll_y = (app.model_scroll_y + dy).clamp(0.0, max_scroll);
-    } else if over_viewport(app) && app.editing.is_none() && app.view_mode == ViewMode::Edit {
+    } else if over_viewport(app) && app.editing.is_none() {
         if app.mods.super_key() || app.mods.control_key() {
-            app.edit_camera.dolly(-dy * 0.006);
+            app.edit_camera.dolly(-dy * 0.0025);
         } else {
             app.edit_camera.pan(dx, dy);
         }

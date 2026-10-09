@@ -1,9 +1,65 @@
+use std::collections::HashMap;
 use std::path::Path;
 
 use glam::{Quat, Vec3};
 
-use space_soup::renderer::{self, GltfMesh};
+use space_soup::renderer::mesh_pipeline::ModelUniform;
+use space_soup::renderer::{self, GltfMesh, Renderer};
 use space_soup_engine::{Color3, CuboidDef, CuboidStyle, GameObject, MeshRef, RenderLight, Scene};
+
+pub(crate) type MeshCache = HashMap<String, (GltfMesh, ModelUniform)>;
+
+/// Loads `path` (relative to `game_dir`) into the mesh cache if it isn't there
+/// yet, recording its base half-size alongside. The single loader behind every
+/// mesh-needing view (scene, grab pose, anim sim, preview).
+pub(crate) fn ensure_mesh_cached(
+    renderer: &Renderer,
+    mesh_cache: &mut MeshCache,
+    mesh_base_half_size: &mut HashMap<String, Vec3>,
+    game_dir: &Path,
+    path: &str,
+) {
+    if mesh_cache.contains_key(path) {
+        return;
+    }
+    let full_path = game_dir.join(path);
+    match GltfMesh::load(
+        &renderer.device,
+        &renderer.queue,
+        renderer.mesh_texture_layout(),
+        &full_path,
+    ) {
+        Ok(mesh) => {
+            let model_uniform = renderer.create_model_uniform();
+            mesh_base_half_size.insert(path.to_string(), mesh_base_half_size_of(&mesh));
+            mesh_cache.insert(path.to_string(), (mesh, model_uniform));
+        }
+        Err(e) => log::warn!("space_soup_editor: failed to load mesh '{path}': {e}"),
+    }
+}
+
+/// [`ensure_mesh_cached`] for every mesh the scene references.
+pub(crate) fn ensure_scene_meshes_cached(
+    renderer: &Renderer,
+    mesh_cache: &mut MeshCache,
+    mesh_base_half_size: &mut HashMap<String, Vec3>,
+    game_dir: &Path,
+    scene: &Scene,
+) {
+    let paths: Vec<String> = scene
+        .objects
+        .iter()
+        .filter_map(|o| o.mesh.as_ref().map(|m| m.path.clone()))
+        .collect();
+    for path in paths {
+        ensure_mesh_cached(renderer, mesh_cache, mesh_base_half_size, game_dir, &path);
+    }
+}
+
+/// Scene lights are authored for the headset's exposure; at editor exposure
+/// they blow the whole viewport to white. Uniformly dimmed here so geometry
+/// stays readable while relative light balance is preserved.
+const EDITOR_LIGHT_DIM: f32 = 0.12;
 
 pub(crate) fn to_render_light(l: &RenderLight) -> renderer::Light {
     renderer::Light {
@@ -14,7 +70,7 @@ pub(crate) fn to_render_light(l: &RenderLight) -> renderer::Light {
             space_soup_engine::LightKind::Spot => renderer::LightKind::Spot,
         },
         color: renderer::Color3(l.color.0, l.color.1, l.color.2, l.color.3),
-        intensity: l.intensity,
+        intensity: l.intensity * EDITOR_LIGHT_DIM,
         range: l.range,
         cone_angle_deg: l.cone_angle_deg,
     }
@@ -26,6 +82,8 @@ pub(crate) fn new_object(
     half: Vec3,
     mesh_path: Option<String>,
 ) -> GameObject {
+    // Struct-update over an explicit field list, so new engine fields with
+    // sensible defaults don't break the editor.
     GameObject {
         id,
         cuboid: CuboidDef {
@@ -39,29 +97,14 @@ pub(crate) fn new_object(
             } else {
                 CuboidStyle::Solid
             },
+            ..Default::default()
         },
         mesh: mesh_path.map(|path| MeshRef {
             path,
             scale: Vec3::ONE,
             rotation_offset: Quat::IDENTITY,
         }),
-        is_trigger: false,
-        hidden: false,
-        script: None,
-        animations: Vec::new(),
-        animation_bindings: Vec::new(),
-        rig_attachment: None,
-        grip_pose_legacy: None,
-        grip_pose_left: None,
-        grip_pose_right: None,
-        rigid_body: None,
-        grip_points: Vec::new(),
-        slider_joint: None,
-        terrain_collider: None,
-        light: None,
-        sound: None,
-        particle_emitter: None,
-        laser: None,
+        ..Default::default()
     }
 }
 
@@ -115,7 +158,7 @@ pub(crate) fn set_object_script(scene: &mut Scene, id: &str, text: String) {
     }
 }
 
-pub(crate) fn mesh_base_half_size(gltf: &GltfMesh) -> Vec3 {
+pub(crate) fn mesh_base_half_size_of(gltf: &GltfMesh) -> Vec3 {
     let mut min = Vec3::splat(f32::MAX);
     let mut max = Vec3::splat(f32::MIN);
     let mut found_any = false;

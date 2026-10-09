@@ -14,10 +14,8 @@ use std::time::Instant;
 use glam::{Quat, Vec3};
 use wgpu::{CommandEncoderDescriptor, TextureViewDescriptor};
 
-use space_soup::renderer::{Color3, Cuboid, GltfMesh, MeshInstance};
-use space_soup_engine::{InputFrame, LocomotionInput, PlayerFrameInput, PlayerRig};
-use space_soup_protocol::PlayerId;
-use std::collections::HashMap;
+use space_soup::renderer::{Color3, Cuboid, MeshInstance, Renderer};
+use space_soup::ui2d::Overlay;
 
 use agate::Theme;
 
@@ -28,7 +26,7 @@ use super::grab_pose_editor;
 use super::layout::Layout;
 use super::object_preview;
 use super::snap;
-use super::{EditTarget, EditorTool, ViewMode};
+use super::{EditTarget, EditorTool};
 
 /// Splits a row rect into a fixed-width label cell and the remaining input cell.
 /// Shared by the inspector and the sub-editor panels.
@@ -41,6 +39,51 @@ pub(crate) fn split_row(row: [f32; 4], label_w: f32, field_gap: f32) -> ([f32; 4
         row[3],
     ];
     (label_r, input_r)
+}
+
+/// One continuous opaque header: the native titlebar strip plus the toolbar
+/// band, with a hairline under it. Drawn in every mode so the strip never
+/// shows raw viewport.
+pub(crate) fn header_backdrop(ui: &mut agate::Ui, theme: &Theme, layout: &Layout) {
+    let tb = layout.toolbar;
+    let bottom = tb[1] + tb[3];
+    ui.fill([layout.window[0], 0.0, layout.window[2], bottom], agate::theme::TOOLBAR_BG);
+    ui.separator(layout.window[0], bottom - theme.px(1.0), layout.window[2]);
+}
+
+/// Acquires the next swapchain frame, logging and skipping the redraw on error.
+fn acquire_frame(
+    surface: &wgpu::Surface,
+) -> Option<(wgpu::SurfaceTexture, wgpu::TextureView)> {
+    match surface.get_current_texture() {
+        Ok(frame) => {
+            let view = frame.texture.create_view(&TextureViewDescriptor::default());
+            Some((frame, view))
+        }
+        Err(e) => {
+            log::warn!("surface error: {e}");
+            None
+        }
+    }
+}
+
+/// Flushes the finished UI through the overlay onto `view` and presents.
+fn present_ui(
+    renderer: &Renderer,
+    overlay: &mut Overlay,
+    ui: &mut agate::Ui,
+    view: &wgpu::TextureView,
+    frame: wgpu::SurfaceTexture,
+) {
+    overlay.set_items(ui.finish());
+    let mut encoder = renderer
+        .device
+        .create_command_encoder(&CommandEncoderDescriptor {
+            label: Some("overlay_enc"),
+        });
+    overlay.render(&renderer.device, &renderer.queue, &mut encoder, view);
+    renderer.queue.submit(Some(encoder.finish()));
+    frame.present();
 }
 
 impl super::App {
@@ -61,6 +104,11 @@ impl super::App {
         let (win_w, win_h) = self.win_size();
         let nav_rows = self.nav_rows();
 
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f32();
+        self.last_tick = now;
+        let ui_input = self.take_ui_input(dt);
+
         let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
             self.renderer.as_mut(),
             self.surface.as_ref(),
@@ -70,102 +118,17 @@ impl super::App {
             return;
         };
 
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f32();
-        self.last_tick = now;
+        let (render_cuboids, render_meshes, render_lights) = self.runtime.render_lists();
 
-        let (render_cuboids, render_meshes, render_lights, scene_change) =
-            if self.view_mode == ViewMode::Edit {
-                let (c, m, l) = self.runtime.render_lists();
-                (c, m, l, None)
-            } else {
-                // Editor's "Play mode" preview is single-player; the engine
-                // is otherwise multi-player-capable now, so it just supplies
-                // one entry under the fixed local-player id.
-                let mut inputs = HashMap::new();
-                inputs.insert(
-                    PlayerId::local(),
-                    PlayerFrameInput {
-                        rig: PlayerRig::new(),
-                        input: InputFrame::default(),
-                        locomotion_input: LocomotionInput::default(),
-                        teleport_target: None,
-                    },
-                );
-                // Editor preview doesn't render particles/lasers (no
-                // authoring UI for them yet, see the particle/laser feature
-                // plan) — discard those two fields rather than threading
-                // them through this preview path for nothing.
-                let (c, m, l, _particle_emitters, _lasers, scene_change) =
-                    self.runtime.update(dt, &inputs);
-                (c, m, l, scene_change)
-            };
-
-        if let Some(next) = scene_change {
-            if let Err(e) = self.runtime.load_scene(&next) {
-                log::warn!("scene switch '{next}': {e}");
-            } else {
-                let new_paths: Vec<String> = self
-                    .runtime
-                    .scene()
-                    .objects
-                    .iter()
-                    .filter_map(|o| o.mesh.as_ref().map(|m| m.path.clone()))
-                    .collect();
-                for path in new_paths {
-                    if self.mesh_cache.contains_key(&path) {
-                        continue;
-                    }
-                    let full_path = self.runtime.game_dir().join(&path);
-                    match GltfMesh::load(
-                        &renderer.device,
-                        &renderer.queue,
-                        renderer.mesh_texture_layout(),
-                        &full_path,
-                    ) {
-                        Ok(mesh) => {
-                            let model_uniform = renderer.create_model_uniform();
-                            self.mesh_base_half_size.insert(
-                                path.clone(),
-                                crate::app::scene_bridge::mesh_base_half_size(&mesh),
-                            );
-                            self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
-                        }
-                        Err(e) => {
-                            log::warn!("space_soup_editor: failed to preload mesh '{path}': {e}")
-                        }
-                    }
-                }
-            }
-        }
-
-        let needed: Vec<String> = self
-            .runtime
-            .scene()
-            .objects
-            .iter()
-            .filter_map(|o| o.mesh.as_ref().map(|m| m.path.clone()))
-            .filter(|p| !self.mesh_cache.contains_key(p))
-            .collect();
-        for path in needed {
-            let full_path = self.runtime.game_dir().join(&path);
-            match GltfMesh::load(
-                &renderer.device,
-                &renderer.queue,
-                renderer.mesh_texture_layout(),
-                &full_path,
-            ) {
-                Ok(mesh) => {
-                    let model_uniform = renderer.create_model_uniform();
-                    self.mesh_base_half_size.insert(
-                        path.clone(),
-                        crate::app::scene_bridge::mesh_base_half_size(&mesh),
-                    );
-                    self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
-                }
-                Err(e) => log::warn!("space_soup_editor: failed to load mesh '{path}': {e}"),
-            }
-        }
+        // One pass covers both a freshly switched scene and any mesh added to
+        // the current one.
+        crate::app::scene_bridge::ensure_scene_meshes_cached(
+            renderer,
+            &mut self.mesh_cache,
+            &mut self.mesh_base_half_size,
+            self.runtime.game_dir(),
+            self.runtime.scene(),
+        );
 
         let game_dir_for_snap = self.runtime.game_dir().to_path_buf();
         snap::update_preview(
@@ -189,41 +152,11 @@ impl super::App {
         let (head_pos, head_rot) = to_world(packet.head.position(), packet.head.rotation());
         self.last_world_head = head_pos;
 
-        match self.view_mode {
-            ViewMode::PlayerView => {
-                self.camera.position = head_pos + Vec3::new(0.0, 1.2, 2.0);
-                let look = (head_pos - self.camera.position).normalize_or_zero();
-                self.camera.rotation = Quat::from_rotation_arc(Vec3::NEG_Z, look);
-            }
-            ViewMode::FirstPerson | ViewMode::RenderView => {
-                let forward = head_rot * Vec3::NEG_Z;
-                self.camera.position = head_pos + forward * 0.15;
-                self.camera.rotation = head_rot;
-            }
-            ViewMode::Edit => {
-                // WASDQE free-look fly (keys are gated in keyboard::fly_active;
-                // Shift = faster). Harmless when nothing is held.
-                self.edit_camera.fly(&self.fly, dt, self.mods.shift_key());
-                self.camera.position = self.edit_camera.position;
-                self.camera.rotation = self.edit_camera.rotation();
-            }
-        }
-
-        const MAX_RENDER_DIST: f32 = 40.0;
-        let (render_cuboids, render_meshes) = if self.view_mode == ViewMode::RenderView {
-            (
-                render_cuboids
-                    .into_iter()
-                    .filter(|rc| rc.position.distance(head_pos) < MAX_RENDER_DIST)
-                    .collect::<Vec<_>>(),
-                render_meshes
-                    .into_iter()
-                    .filter(|rm| rm.position.distance(head_pos) < MAX_RENDER_DIST)
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            (render_cuboids, render_meshes)
-        };
+        // WASDQE free-look fly (keys are gated in keyboard::fly_active;
+        // Shift = faster). Harmless when nothing is held.
+        self.edit_camera.fly(&self.fly, dt, self.mods.shift_key());
+        self.camera.position = self.edit_camera.position;
+        self.camera.rotation = self.edit_camera.rotation();
 
         let selected_id = self.selected_object.clone();
         let mut cuboids = scene::build_cuboids(
@@ -234,7 +167,6 @@ impl super::App {
             to_world,
             &self.runtime.scene().objects,
             selected_id.as_deref(),
-            self.view_mode == ViewMode::Edit,
             self.dragging_new_object.is_some(),
             self.ghost_preview,
         );
@@ -251,14 +183,9 @@ impl super::App {
             }
         }
 
-        let frame = match surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("surface error: {e}");
-                return;
-            }
+        let Some((frame, view)) = acquire_frame(surface) else {
+            return;
         };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         for rm in &render_meshes {
             if let Some((mesh, _)) = self.mesh_cache.get_mut(&rm.path) {
@@ -272,21 +199,21 @@ impl super::App {
             .iter()
             .filter_map(|rm| {
                 let (mesh, model) = self.mesh_cache.get(&rm.path)?;
-                Some(MeshInstance { mesh, model })
+                Some(MeshInstance { mesh, model, lightmap_key: None })
             })
             .collect();
 
         if self.tool == EditorTool::Snap && !self.snap_joint_frame.is_empty() {
             let hand_path = snap::hand_glb_path(self.snap_hand);
             if let Some((mesh, model)) = self.mesh_cache.get(hand_path) {
-                mesh_instances.push(MeshInstance { mesh, model });
+                mesh_instances.push(MeshInstance { mesh, model, lightmap_key: None });
             }
         }
 
         mesh_instances.extend(
             self.debug_meshes
                 .iter()
-                .map(|(mesh, model)| MeshInstance { mesh, model }),
+                .map(|(mesh, model)| MeshInstance { mesh, model, lightmap_key: None }),
         );
 
         let editor_view_mode = matches!(
@@ -314,13 +241,12 @@ impl super::App {
                 (win_w, win_h),
                 &self.runtime.scene().objects,
                 selected_id.as_deref(),
-                self.view_mode,
                 editor_view_mode,
                 self.gizmo_dragging,
             ));
         }
 
-        if self.view_mode == ViewMode::Edit && !editor_view_mode {
+        if !editor_view_mode {
             mesh_instances.extend(scene::collect_icon_instances(
                 &self.icon_assets,
                 &mut self.icon_mesh_cache,
@@ -334,38 +260,20 @@ impl super::App {
             render_lights.iter().map(crate::app::scene_bridge::to_render_light).collect();
         renderer.render_with_lights(&view, &self.camera, &cuboids, &mesh_instances, &lights);
 
-        let ui_input = agate::UiInput {
-            mouse_pos: self.mouse_pos,
-            mouse_held: std::mem::take(&mut self.mouse_held),
-            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
-            mouse_released: std::mem::take(&mut self.mouse_released),
-            scroll_y: std::mem::take(&mut self.scroll_y),
-            text: std::mem::take(&mut self.text_input),
-            keys: std::mem::take(&mut self.named_keys),
-            cmd: self.mods.super_key() || self.mods.control_key(),
-            shift: self.mods.shift_key(),
-            alt: self.mods.alt_key(),
-            dt,
-        };
         ui.begin_frame(win_w, win_h, &ui_input);
 
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
 
-        if self.view_mode == ViewMode::Edit {
-            ui.card_border(layout.center);
-        }
 
         toolbar::draw(
             ui,
             &theme,
             &layout,
-            &mut self.view_mode,
-            &mut self.edit_camera,
-            self.last_world_head,
             &mut self.editing,
             self.selected_file,
-            &self.editor,
+            self.runtime.scene_name(),
+            self.scene_dirty,
         );
         if toolbar::draw_save(ui, &theme, &layout, &self.editing, self.editor.dirty) {
             let _ = self.editor.save();
@@ -422,7 +330,7 @@ impl super::App {
                     self.scene_dirty = true;
                 }
             }
-        } else if self.view_mode == ViewMode::Edit {
+        } else {
             let (new_mode, new_tool, new_hand) = viewport_overlay::draw(
                 ui,
                 &theme,
@@ -473,7 +381,7 @@ impl super::App {
             &mut open_object_preview,
             &mut preview_sound,
             &mut self.inspector_content_height,
-            self.view_mode == ViewMode::Edit,
+            true,
             &mut self.inspector_rot_edit,
             &packet,
             &self.mesh_cache,
@@ -521,16 +429,7 @@ impl super::App {
             tool_hint.as_deref(),
         );
 
-        overlay.set_items(ui.finish());
-
-        let mut encoder = renderer
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("overlay_enc"),
-            });
-        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
-        renderer.queue.submit(Some(encoder.finish()));
-        frame.present();
+        present_ui(renderer, overlay, ui, &view, frame);
 
         if let Some(fi) = clicked_nav {
             self.open_file(fi);
@@ -545,15 +444,13 @@ impl super::App {
             object_preview::open(self, id);
         }
 
-        self.mouse_held = if self.left_down {
-            vec![agate::AMouseButton::Left]
-        } else {
-            vec![]
-        };
+        self.reseed_mouse_held();
     }
 
     fn redraw_grab_pose(&mut self) {
         let (win_w, win_h) = self.win_size();
+        self.last_tick = Instant::now();
+        let ui_input = self.take_ui_input(0.0);
 
         let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
             self.renderer.as_mut(),
@@ -564,9 +461,6 @@ impl super::App {
             return;
         };
 
-        let now = Instant::now();
-        self.last_tick = now;
-
         let game_dir = self.runtime.game_dir().to_path_buf();
         grab_pose_editor::ensure_hand_meshes_loaded(renderer, &mut self.mesh_cache, &game_dir);
 
@@ -576,23 +470,13 @@ impl super::App {
             .and_then(|id| self.runtime.scene().find_object(id))
             .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
         if let Some(path) = &object_mesh_path {
-            if !self.mesh_cache.contains_key(path) {
-                let full_path = game_dir.join(path);
-                match GltfMesh::load(
-                    &renderer.device,
-                    &renderer.queue,
-                    renderer.mesh_texture_layout(),
-                    &full_path,
-                ) {
-                    Ok(mesh) => {
-                        let model_uniform = renderer.create_model_uniform();
-                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
-                    }
-                    Err(e) => log::warn!(
-                        "space_soup_editor: grab pose editor failed to load '{path}': {e}"
-                    ),
-                }
-            }
+            crate::app::scene_bridge::ensure_mesh_cached(
+                renderer,
+                &mut self.mesh_cache,
+                &mut self.mesh_base_half_size,
+                &game_dir,
+                path,
+            );
         }
 
         let Some(state) = self.grab_pose_editor.as_ref() else {
@@ -612,35 +496,17 @@ impl super::App {
         let mesh_instances =
             grab_pose_editor::collect_mesh_instances(state, self.runtime.scene(), &self.mesh_cache);
 
-        let frame = match surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("surface error: {e}");
-                return;
-            }
+        let Some((frame, view)) = acquire_frame(surface) else {
+            return;
         };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
 
-        let ui_input = agate::UiInput {
-            mouse_pos: self.mouse_pos,
-            mouse_held: std::mem::take(&mut self.mouse_held),
-            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
-            mouse_released: std::mem::take(&mut self.mouse_released),
-            scroll_y: std::mem::take(&mut self.scroll_y),
-            text: std::mem::take(&mut self.text_input),
-            keys: std::mem::take(&mut self.named_keys),
-            cmd: self.mods.super_key() || self.mods.control_key(),
-            shift: self.mods.shift_key(),
-            alt: self.mods.alt_key(),
-            dt: 0.0,
-        };
         ui.begin_frame(win_w, win_h, &ui_input);
 
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
-        ui.card_border(layout.grab_pose_viewport());
+        header_backdrop(ui, &theme, &layout);
 
         let scene_ref = self.runtime.scene();
         let Some(state) = self.grab_pose_editor.as_mut() else {
@@ -654,22 +520,8 @@ impl super::App {
             scene_ref,
         );
 
-        overlay.set_items(ui.finish());
-
-        let mut encoder = renderer
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("overlay_enc"),
-            });
-        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
-        renderer.queue.submit(Some(encoder.finish()));
-        frame.present();
-
-        self.mouse_held = if self.left_down {
-            vec![agate::AMouseButton::Left]
-        } else {
-            vec![]
-        };
+        present_ui(renderer, overlay, ui, &view, frame);
+        self.reseed_mouse_held();
 
         if actions.save {
             grab_pose_editor::save(self);
@@ -752,6 +604,12 @@ impl super::App {
     fn redraw_anim_sim(&mut self) {
         let (win_w, win_h) = self.win_size();
 
+        // Real dt so preview playback advances (about_to_wait drives redraws).
+        let now = Instant::now();
+        let dt = now.duration_since(self.last_tick).as_secs_f32();
+        self.last_tick = now;
+        let ui_input = self.take_ui_input(dt);
+
         let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
             self.renderer.as_mut(),
             self.surface.as_ref(),
@@ -761,11 +619,6 @@ impl super::App {
             return;
         };
 
-        // Real dt so preview playback advances (about_to_wait drives redraws).
-        let now = Instant::now();
-        let dt = now.duration_since(self.last_tick).as_secs_f32();
-        self.last_tick = now;
-
         // Load the object's mesh if it isn't cached yet.
         let game_dir = self.runtime.game_dir().to_path_buf();
         let object_mesh_path = self
@@ -774,23 +627,13 @@ impl super::App {
             .and_then(|s| self.runtime.scene().find_object(&s.object_id))
             .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
         if let Some(path) = &object_mesh_path {
-            if !self.mesh_cache.contains_key(path) {
-                let full_path = game_dir.join(path);
-                match GltfMesh::load(
-                    &renderer.device,
-                    &renderer.queue,
-                    renderer.mesh_texture_layout(),
-                    &full_path,
-                ) {
-                    Ok(mesh) => {
-                        let model_uniform = renderer.create_model_uniform();
-                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
-                    }
-                    Err(e) => log::warn!(
-                        "space_soup_editor: anim sim editor failed to load '{path}': {e}"
-                    ),
-                }
-            }
+            crate::app::scene_bridge::ensure_mesh_cached(
+                renderer,
+                &mut self.mesh_cache,
+                &mut self.mesh_base_half_size,
+                &game_dir,
+                path,
+            );
         }
 
         let Some(state) = self.anim_sim_editor.as_ref() else {
@@ -804,35 +647,17 @@ impl super::App {
         let mesh_instances =
             anim_sim_editor::collect_mesh_instances(state, self.runtime.scene(), &self.mesh_cache);
 
-        let frame = match surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("surface error: {e}");
-                return;
-            }
+        let Some((frame, view)) = acquire_frame(surface) else {
+            return;
         };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
 
-        let ui_input = agate::UiInput {
-            mouse_pos: self.mouse_pos,
-            mouse_held: std::mem::take(&mut self.mouse_held),
-            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
-            mouse_released: std::mem::take(&mut self.mouse_released),
-            scroll_y: std::mem::take(&mut self.scroll_y),
-            text: std::mem::take(&mut self.text_input),
-            keys: std::mem::take(&mut self.named_keys),
-            cmd: self.mods.super_key() || self.mods.control_key(),
-            shift: self.mods.shift_key(),
-            alt: self.mods.alt_key(),
-            dt,
-        };
         ui.begin_frame(win_w, win_h, &ui_input);
 
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
-        ui.card_border(layout.anim_sim_viewport());
+        header_backdrop(ui, &theme, &layout);
 
         let has_anim_clipboard = self.anim_clipboard.is_some();
         let has_key_clipboard = self.keyframe_clipboard.is_some();
@@ -850,22 +675,8 @@ impl super::App {
             has_key_clipboard,
         );
 
-        overlay.set_items(ui.finish());
-
-        let mut encoder = renderer
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("overlay_enc"),
-            });
-        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
-        renderer.queue.submit(Some(encoder.finish()));
-        frame.present();
-
-        self.mouse_held = if self.left_down {
-            vec![agate::AMouseButton::Left]
-        } else {
-            vec![]
-        };
+        present_ui(renderer, overlay, ui, &view, frame);
+        self.reseed_mouse_held();
 
         // Advance the preview after drawing (uses this frame's dt).
         anim_sim_editor::update_playback(self, dt);
@@ -1019,6 +830,8 @@ impl super::App {
 
     fn redraw_object_preview(&mut self) {
         let (win_w, win_h) = self.win_size();
+        self.last_tick = Instant::now();
+        let ui_input = self.take_ui_input(0.0);
 
         let (Some(renderer), Some(surface), Some(overlay), Some(ui)) = (
             self.renderer.as_mut(),
@@ -1029,9 +842,6 @@ impl super::App {
             return;
         };
 
-        let now = Instant::now();
-        self.last_tick = now;
-
         let game_dir = self.runtime.game_dir().to_path_buf();
         let object_id = self.object_preview.as_ref().map(|s| s.object_id.clone());
         let object_mesh_path = object_id
@@ -1039,23 +849,13 @@ impl super::App {
             .and_then(|id| self.runtime.scene().find_object(id))
             .and_then(|o| o.mesh.as_ref().map(|m| m.path.clone()));
         if let Some(path) = &object_mesh_path {
-            if !self.mesh_cache.contains_key(path) {
-                let full_path = game_dir.join(path);
-                match GltfMesh::load(
-                    &renderer.device,
-                    &renderer.queue,
-                    renderer.mesh_texture_layout(),
-                    &full_path,
-                ) {
-                    Ok(mesh) => {
-                        let model_uniform = renderer.create_model_uniform();
-                        self.mesh_cache.insert(path.clone(), (mesh, model_uniform));
-                    }
-                    Err(e) => {
-                        log::warn!("space_soup_editor: object preview failed to load '{path}': {e}")
-                    }
-                }
-            }
+            crate::app::scene_bridge::ensure_mesh_cached(
+                renderer,
+                &mut self.mesh_cache,
+                &mut self.mesh_base_half_size,
+                &game_dir,
+                path,
+            );
         }
 
         let Some(state) = self.object_preview.as_ref() else {
@@ -1086,40 +886,21 @@ impl super::App {
             (win_w, win_h),
             &self.runtime.scene().objects,
             Some(&object_id),
-            ViewMode::Edit,
             false,
             self.gizmo_dragging,
         ));
 
-        let frame = match surface.get_current_texture() {
-            Ok(f) => f,
-            Err(e) => {
-                log::warn!("surface error: {e}");
-                return;
-            }
+        let Some((frame, view)) = acquire_frame(surface) else {
+            return;
         };
-        let view = frame.texture.create_view(&TextureViewDescriptor::default());
 
         renderer.render_with_meshes(&view, &self.camera, &cuboids, &mesh_instances);
 
-        let ui_input = agate::UiInput {
-            mouse_pos: self.mouse_pos,
-            mouse_held: std::mem::take(&mut self.mouse_held),
-            mouse_pressed: std::mem::take(&mut self.mouse_pressed),
-            mouse_released: std::mem::take(&mut self.mouse_released),
-            scroll_y: std::mem::take(&mut self.scroll_y),
-            text: std::mem::take(&mut self.text_input),
-            keys: std::mem::take(&mut self.named_keys),
-            cmd: self.mods.super_key() || self.mods.control_key(),
-            shift: self.mods.shift_key(),
-            alt: self.mods.alt_key(),
-            dt: 0.0,
-        };
         ui.begin_frame(win_w, win_h, &ui_input);
 
         let theme: Theme = ui.theme;
         let layout = Layout::new(win_w, win_h, &theme);
-        ui.card_border(layout.grab_pose_viewport());
+        header_backdrop(ui, &theme, &layout);
 
         let Some(state) = self.object_preview.as_mut() else {
             return;
@@ -1167,22 +948,8 @@ impl super::App {
             self.scene_dirty = true;
         }
 
-        overlay.set_items(ui.finish());
-
-        let mut encoder = renderer
-            .device
-            .create_command_encoder(&CommandEncoderDescriptor {
-                label: Some("overlay_enc"),
-            });
-        overlay.render(&renderer.device, &renderer.queue, &mut encoder, &view);
-        renderer.queue.submit(Some(encoder.finish()));
-        frame.present();
-
-        self.mouse_held = if self.left_down {
-            vec![agate::AMouseButton::Left]
-        } else {
-            vec![]
-        };
+        present_ui(renderer, overlay, ui, &view, frame);
+        self.reseed_mouse_held();
 
         if done_clicked
             || panel_actions.open_script_editor

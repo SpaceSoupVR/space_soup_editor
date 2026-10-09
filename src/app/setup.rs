@@ -15,15 +15,28 @@ use super::App;
 
 impl App {
     pub(crate) fn resumed_setup(&mut self, event_loop: &ActiveEventLoop) {
-        let window = Arc::new(
-            event_loop
-                .create_window(
-                    winit::window::WindowAttributes::default()
-                        .with_title("space_soup_editor")
-                        .with_inner_size(winit::dpi::LogicalSize::new(1600u32, 900u32)),
-                )
-                .unwrap(),
-        );
+        let attrs = winit::window::WindowAttributes::default()
+            .with_title("Space Soup")
+            .with_inner_size(winit::dpi::LogicalSize::new(1600u32, 900u32))
+            .with_theme(Some(winit::window::Theme::Dark));
+        let window = Arc::new(event_loop.create_window(attrs).unwrap());
+
+        // Native Apple chrome from the render layer: unified titlebar strip
+        // (traffic lights, drag, zoom) with our content extending under it.
+        // The UI is opaque and docked, so no vibrancy backdrop.
+        #[cfg(target_os = "macos")]
+        if !space_soup::renderer::configure_macos_window(
+            window.as_ref(),
+            &space_soup::renderer::MacosWindowChrome {
+                // Pin the appearance so titlebar text and controls stay dark
+                // even on a light system.
+                appearance: space_soup::renderer::WindowAppearance::Dark,
+                vibrancy: None,
+                ..Default::default()
+            },
+        ) {
+            log::warn!("space_soup_editor: macOS window chrome unavailable");
+        }
         self.scale = window.scale_factor() as f32;
         self.window = Some(window.clone());
 
@@ -45,51 +58,52 @@ impl App {
         let size = window.inner_size();
         let caps = surface.get_capabilities(&adapter);
         let fmt = caps.formats[0];
+        // A non-opaque compositing mode lets the vibrancy layer show through
+        // wherever the surface alpha is below 1 (the translucent clear + UI).
+        let alpha_mode = caps
+            .alpha_modes
+            .iter()
+            .copied()
+            .find(|m| {
+                matches!(
+                    m,
+                    CompositeAlphaMode::PostMultiplied | CompositeAlphaMode::PreMultiplied
+                )
+            })
+            .unwrap_or(caps.alpha_modes[0]);
         let cfg = SurfaceConfiguration {
             usage: TextureUsages::RENDER_ATTACHMENT,
             format: fmt,
             width: size.width,
             height: size.height,
             present_mode: PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: vec![],
             desired_maximum_frame_latency: 2,
         };
         surface.configure(&device, &cfg);
 
         self.camera = Camera::new(size.width as f32 / size.height as f32);
-        let renderer = Renderer::from_device(device, queue, fmt, size.width, size.height);
+        let mut renderer = Renderer::from_device(device, queue, fmt, size.width, size.height);
+        // Neutral dark viewport backdrop, matching the docked chrome.
+        renderer.clear_color = wgpu::Color {
+            r: 0.016,
+            g: 0.017,
+            b: 0.022,
+            a: 1.0,
+        };
         let overlay = Overlay::new(&renderer.device, fmt, size.width, size.height, self.scale);
 
         let font = Arc::new(load_font());
         let ui = Ui::new(self.scale, font);
 
-        let mesh_paths: Vec<String> = self
-            .runtime
-            .scene()
-            .objects
-            .iter()
-            .filter_map(|o| o.mesh.as_ref().map(|m| m.path.clone()))
-            .collect();
-        for path in mesh_paths {
-            if self.mesh_cache.contains_key(&path) {
-                continue;
-            }
-            let full_path = self.runtime.game_dir().join(&path);
-            match GltfMesh::load(
-                &renderer.device,
-                &renderer.queue,
-                renderer.mesh_texture_layout(),
-                &full_path,
-            ) {
-                Ok(mesh) => {
-                    let model_uniform = renderer.create_model_uniform();
-                    log::info!("space_soup_editor: preloaded mesh '{path}'");
-                    self.mesh_cache.insert(path, (mesh, model_uniform));
-                }
-                Err(e) => log::warn!("space_soup_editor: failed to preload mesh '{path}': {e}"),
-            }
-        }
+        crate::app::scene_bridge::ensure_scene_meshes_cached(
+            &renderer,
+            &mut self.mesh_cache,
+            &mut self.mesh_base_half_size,
+            self.runtime.game_dir(),
+            self.runtime.scene(),
+        );
 
         self.gizmo_assets = Some(GizmoAssets::load(&renderer));
         self.icon_assets = Some(renderer.create_icon_assets());
